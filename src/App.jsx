@@ -1032,28 +1032,12 @@ export default function App() {
         await checkAuthAndFetchData();
         setActiveTab('courses');
       } else {
-        const newId = `mock-course-${courses.length + 101}`;
-        setCourses([
-          {
-            id: newId,
-            name: settings.class_name,
-            section: settings.section || "Cohort 1",
-            enrollmentCode: `ENR${Math.floor(100 + Math.random() * 900)}`,
-            studentsCount: students.length,
-            topicsCount: curriculum.length,
-            materialsCount: curriculum.filter(c => (c.presentation_urls && c.presentation_urls.length > 0) || c.presentation_url).length,
-            courseworkCount: curriculum.filter(c => c.assignment_title || c.quiz_title).length,
-            state: "ACTIVE",
-            topics: curriculum.map(c => c.stream_topic || `${c.sequence}: ${c.title}`)
-          },
-          ...courses
-        ]);
-        showToast(`Created & Populated "${settings.class_name}" in Google Classroom!`);
-        setActiveTab('courses');
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server responded with status: ${res.status}`);
       }
     } catch (err) {
       console.error(err);
-      showToast("Created course successfully.");
+      showToast(`Error creating course: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -1916,30 +1900,39 @@ export default function App() {
                 <div className="dropdown-panel-content" style={{ paddingTop: '16px' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
                     <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Course Title / Name</label>
+                      <label className="form-label" title="The primary name of your course as it will appear on the class card and heading in Google Classroom.">
+                        Course Title / Name <span style={{ cursor: 'help', fontSize: '0.8em', color: '#666' }}>ⓘ</span>
+                      </label>
                       <input
                         type="text"
                         className="form-control"
+                        title="The primary name of your course as it will appear on the class card and heading in Google Classroom."
                         value={settings.class_name}
                         onChange={e => setSettings({ ...settings, class_name: e.target.value })}
                       />
                     </div>
 
                     <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Section / Cohort</label>
+                      <label className="form-label" title="Appears below the course title in Google Classroom. Use this to differentiate classes (e.g., 'Fall 2026', 'Period 3', or 'Cohort B').">
+                        Section / Cohort <span style={{ cursor: 'help', fontSize: '0.8em', color: '#666' }}>ⓘ</span>
+                      </label>
                       <input
                         type="text"
                         className="form-control"
+                        title="Appears below the course title in Google Classroom. Use this to differentiate classes (e.g., 'Fall 2026', 'Period 3', or 'Cohort B')."
                         value={settings.section}
                         onChange={e => setSettings({ ...settings, section: e.target.value })}
                       />
                     </div>
 
                     <div className="form-group" style={{ marginBottom: 0 }}>
-                      <label className="form-label">Subject Area</label>
+                      <label className="form-label" title="The academic discipline or department for this course (e.g., 'Computer Science', 'Mathematics', or 'Language Arts').">
+                        Subject Area <span style={{ cursor: 'help', fontSize: '0.8em', color: '#666' }}>ⓘ</span>
+                      </label>
                       <input
                         type="text"
                         className="form-control"
+                        title="The academic discipline or department for this course (e.g., 'Computer Science', 'Mathematics', or 'Language Arts')."
                         value={settings.subject}
                         onChange={e => setSettings({ ...settings, subject: e.target.value })}
                       />
