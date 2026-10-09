@@ -1,426 +1,428 @@
 ================================================================================
-GOOGLE CLASSROOM COURSE BUILDER - GOOGLE OAUTH 2.0 RESOLUTION & TROUBLESHOOTING GUIDE
+AGENTIC PROTOCOL & OPERATIONAL SPECIFICATION:
+UNIVERSAL OAUTH 2.0 AUTHENTICATION & DEPLOYMENT ARCHITECTURE
 ================================================================================
-Organization: AI Foundation Australia
-System: Google Classroom Course Builder & Automation Studio
-File Type: Plain Text Operational Guide
+Document Classification: Agnostic Agentic Runbook & Operational Architecture
+Target Audience: Autonomous AI Agents, Agentic Coding Systems, DevOps Engineers
+Applicable Deployments: All Cloud Edge Providers (Vercel, Netlify, Cloudflare, AWS),
+                        Containerized Services (Docker, Cloud Run, Kubernetes),
+                        and Local Runtimes (Localhost, Development Workstations)
+Protocol Revision: 3.0 (Production Stable)
 Date: October 2026
 
 --------------------------------------------------------------------------------
 TABLE OF CONTENTS
 --------------------------------------------------------------------------------
-1. EXECUTIVE SUMMARY
-2. ORIGIN AND ROOT CAUSE OF THE ISSUE ("FAKE LOGINS")
-   2.1 Frontend Hardcoded Mock Fallback
-   2.2 Local Server Auto-Restore of Stale Tokens
-   2.3 The Vercel Python 225 MB Function Limit Dilemma
-   2.4 The Vercel Routing Collision (404 DNS_HOSTNAME_RESOLVED_PRIVATE)
-   2.5 GitHub Push Protection & Secret Scanning Rejection
-3. STEP-BY-STEP RESOLUTION EXPLANATION (EVERY ACTION TAKEN)
-   3.1 Step 1: Removal of All Mock & Simulator Code from the Frontend
-   3.2 Step 2: Elimination of the Heavy Python Serverless Entrypoint
-   3.3 Step 3: Architecture of Lightweight Node.js Serverless Functions for Vercel
-   3.4 Step 4: Local Python Server Hardening (api_server.py)
-   3.5 Step 5: Vercel Routing Configuration (vercel.json & .vercelignore)
-   3.6 Step 6: GitHub Secret Protection Compliance (Zero Hardcoded Secrets)
-   3.7 Step 7: Vercel Cloud Environment Variables Injection
-   3.8 Step 8: Vercel Production Redeployment & Verification
-   3.9 Step 9: Google Cloud Console Redirect URI Alignment
-4. STANDARD OPERATING PROCEDURE (SOP): INSTRUCTIONS TO FOLLOW EVERY TIME THIS OCCURS
-   4.1 Phase 1: Diagnosing the Symptom
-   4.2 Phase 2: Resolving Google Cloud Console "Error 400: redirect_uri_mismatch"
-   4.3 Phase 3: Resolving "Error 403: access_denied" (Test User Limitation)
-   4.4 Phase 4: Local Environment Reset (Clearing Stale Tokens)
-   4.5 Phase 5: Vercel Environment Variables Verification
-   4.6 Phase 6: Code Base Safety Audit (Enforcing the NO-DELETE Policy)
-5. REFERENCE ARCHITECTURE & CONFIGURATION VALUES
+1. AGENT ROLE, OBJECTIVE & CORE INVARIANTS
+2. ORIGIN & ANATOMY OF THE SYSTEMIC FAILURE ("FAKE MOCK LOGINS")
+   2.1 Anti-Pattern 1: Environmental Branch Mocking in Frontend
+   2.2 Anti-Pattern 2: Zombie Session Auto-Restoration on Backend
+   2.3 Anti-Pattern 3: Fat Monolith Bundling on Serverless Edge
+   2.4 Anti-Pattern 4: Private Loopback Rewrites in Cloud Edge
+   2.5 Anti-Pattern 5: Hardcoded Credential Ingestion & Git Push Failures
+3. UNIVERSAL DECOUPLED OAUTH (UD-OAUTH) ARCHITECTURE
+   3.1 Gateway-Engine Separation Architecture
+   3.2 Dynamic Origin & Redirect URI Resolution
+   3.3 Account Picker Enforcement Protocol
+   3.4 Session State Lifecycle & Cryptographic Storage
+4. AGENT DECISION & DIAGNOSTIC MATRIX
+5. AGENT PRE-FLIGHT CHECKLIST (MANDATORY BEFORE ANY EDIT)
+6. STEP-BY-STEP AGENTIC RESOLUTION PROTOCOLS
+   6.1 Protocol A: Frontend Mock Eradication & Strict State Binding
+   6.2 Protocol B: Lightweight Edge Auth Gateway Construction
+   6.3 Protocol C: Backend Session & Token Lifecycle Hardening
+   6.4 Protocol D: Multi-Target Cloud Routing & Boundary Configuration
+   6.5 Protocol E: Secret Isolation & Environment Variable Provisioning
+   6.6 Protocol F: Automated Verification & Smoke Testing Harness
+7. RE-OCCURRENCE MITIGATION & SELF-HEALING PROCEDURES
+   7.1 Handling "redirect_uri_mismatch"
+   7.2 Handling "access_denied" (OAuth Consent Screen Quotas)
+   7.3 Handling Stale Disk/Cookie Desynchronization
+   7.4 Handling Strict Safety & Policy Enforcements (NO-DELETE Policy)
+8. AGENTIC ENVIRONMENT REFERENCE MANIFEST
 
 ================================================================================
-1. EXECUTIVE SUMMARY
+1. AGENT ROLE, OBJECTIVE & CORE INVARIANTS
 ================================================================================
-This document records the exact root cause, complete sequence of engineering 
-steps taken, and standard operating procedures (SOP) established to resolve the 
-issue where the application performed "fake logins" by copying 
-support@aifoundation.net.au into state rather than authenticating against real 
-Google accounts.
+When acting on this repository or any deployment using OAuth 2.0, the executing 
+agent must uphold four fundamental invariants:
 
-The application now operates on a hybrid dual-environment OAuth architecture:
-- Locally: Vite (port 5173) proxies to Python (api_server.py, port 8000), 
-  handling Google OAuth with dynamic origin detection and prompt='select_account consent'.
-- On Vercel Cloud: Native Node.js Serverless Functions in api/auth/ execute 
-  direct OAuth 2.0 token exchanges with Google and establish secure HTTP-only 
-  session cookies (gcb_session), entirely bypassing Vercel's 225 MB Python limits.
+[INVARIANT-01] ZERO MOCK AUTHENTICATION IN PRODUCTION OR TESTING
+Under no circumstances may an agent inject hardcoded user identities, email 
+fallbacks (e.g. copying support@aifoundation.net.au), or simulated offline states 
+into an authentication flow. If authentication fails, the application MUST fail 
+transparently and display an actionable error, rather than faking authorization.
+
+[INVARIANT-02] ZERO SECRETS IN VERSION CONTROL
+Never stage, commit, or hardcode Client IDs, Client Secrets, Service Account keys, 
+or refresh tokens in tracked files. All secrets must be consumed dynamically from 
+secure environment variables (process.env or os.environ) or explicitly gitignored 
+runtime secret files.
+
+[INVARIANT-03] EPHEMERAL SESSION PURGE ON LOGOUT
+Logout operations must be atomic and complete across all persistence layers: 
+cookies, server memory, on-disk token stores, and client-side web storage. 
+A revoked or logged-out session MUST NOT be auto-restored.
+
+[INVARIANT-04] DYNAMIC ORIGIN & REDIRECT URI RESOLUTION
+Never hardcode hostnames, port numbers, or protocol schemes in OAuth callback 
+generators. All redirect URIs must be resolved at runtime using the incoming 
+request's forwarded headers, supporting localhost, custom domains, and staging URLs.
 
 ================================================================================
-2. ORIGIN AND ROOT CAUSE OF THE ISSUE ("FAKE LOGINS")
+2. ORIGIN & ANATOMY OF THE SYSTEMIC FAILURE ("FAKE MOCK LOGINS")
 ================================================================================
-The issue of "fake logins copying support@aifoundation.net.au without real 
-authentication" arose from an accumulation of five distinct technical causes:
+To prevent recurrence, autonomous agents must understand the exact sequence of 
+interconnected failures that produced the "fake login" defect:
+
+2.1 Anti-Pattern 1: Environmental Branch Mocking in Frontend
+Symptom: Users logging into cloud environments found their account forced to 
+         support@aifoundation.net.au without receiving a Google consent prompt.
+Mechanism: A developer attempted to create a "cloud preview fallback" inside the 
+           UI layer:
+           if (hostname === 'localhost') {
+               redirect('/api/auth/google_login');
+           } else {
+               user = { email: 'support@aifoundation.net.au', ... };
+               saveToLocalStorage(user);
+           }
+Consequence: In cloud environments, the client bypassed the OAuth server entirely, 
+             creating an illusion of authentication while preventing actual access 
+             to real user classroom courses.
+
+2.2 Anti-Pattern 2: Zombie Session Auto-Restoration on Backend
+Symptom: A user clicked "Log Out", yet upon page reload or polling, was instantly 
+         re-authenticated as support@aifoundation.net.au.
+Mechanism: The backend logout handler only unlinked user_session.json while leaving 
+           token.json intact on disk. The periodic /api/auth/me polling routine 
+           inspected disk for token.json candidates and automatically refreshed 
+           and regenerated the session without user consent.
+Consequence: The local workspace became trapped in a persistent login state that 
+             survived logouts and prevented switching accounts.
+
+2.3 Anti-Pattern 3: Fat Monolith Bundling on Serverless Edge
+Symptom: Vercel build failure: "Total bundle size (294.50 MB) exceeds the maximum 
+         function size (225 MB)."
+Mechanism: An agent configured api/index.py to run the entire backend (FastAPI/HTTP 
+           server with pandas, numpy, openpyxl, google-api-python-client) inside 
+           a serverless function.
+Consequence: Cloud serverless runtimes enforce strict payload boundaries (225 MB 
+             on Vercel, 250 MB on AWS Lambda). The failed build led to breaking 
+             cloud API calls and reverting to mock fallbacks.
+
+2.4 Anti-Pattern 4: Private Loopback Rewrites in Cloud Edge
+Symptom: Vercel response: "404 DNS_HOSTNAME_RESOLVED_PRIVATE (syd1 node)".
+Mechanism: A rewrite rule forwarded cloud traffic:
+           {"source": "/api/(.*)", "destination": "http://127.0.0.1:8000/api/$1"}
+Consequence: Public cloud edge runners cannot resolve loopback or private IPv4 
+             addresses (127.0.0.1, 10.x, 192.168.x). The requests were blocked 
+             at the edge firewall, causing total API failure.
+
+2.5 Anti-Pattern 5: Hardcoded Credential Ingestion & Git Push Failures
+Symptom: Git push rejected by GitHub Secret Scanning (Push Protection Rule GH013).
+Mechanism: When implementing serverless functions, credentials were typed into 
+           source code files as defaults.
+Consequence: Modern automated Git providers reject pushes containing Google OAuth 
+             Client Secrets, blocking the deployment pipeline.
+
+================================================================================
+3. UNIVERSAL DECOUPLED OAUTH (UD-OAUTH) ARCHITECTURE
+================================================================================
+The solution is a deployment-agnostic architecture called Universal Decoupled OAuth. 
+Agents must preserve this pattern across all deployments:
+
++-----------------------------------------------------------------------------+
+| CLIENT TIER (Vite / React / Static SPA)                                     |
+| - Strictly passive state consumer (no hardcoded users, no fake fallbacks)   |
+| - Login action unconditionally routes to /api/auth/google_login             |
+| - Single Source of Truth: /api/auth/me via HTTP cookies or Bearer auth       |
++---------------------------------------+-------------------------------------+
+                                        |
+                 +----------------------+----------------------+
+                 |                                             |
++----------------v----------------------+    +-----------------v---------------+
+| CLOUD EDGE TIER (Node Serverless/Edge)|    | LOCAL WORKSTATION (Python Engine|
+| - Lightweight (< 15 KB) Auth Gateway  |    | - api_server.py on port 8000   |
+| - api/auth/google_login.js            |    | - Vite reverse-proxy (5173)    |
+| - api/auth/oauth2callback.js          |    | - Direct Google Classroom API  |
+| - api/auth/me.js                      |    | - Full pandas/numpy processing |
+| - api/auth/logout.js                  |    | - Atomic session/token purges  |
++---------------------------------------+    +---------------------------------+
+
+3.1 Gateway-Engine Separation
+- Auth Gateways handle only identity: redirecting, code exchange, profile query, 
+  and session cookie serialization. Because they require zero heavy libraries, 
+  they deploy instantly across any edge runtime without bundle overflow.
+- Heavy Processing Engines (Excel parsing, syllabus generation, roster batch 
+  jobs) execute inside environments configured for heavy workloads (Local Dev, 
+  Docker containers, AWS ECS, or Cloud Run).
+
+3.2 Dynamic Origin & Redirect URI Resolution
+Gateways must extract the active scheme and host dynamically:
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https');
+  const redirectUri = `${proto}://${host}/api/auth/oauth2callback`;
+This guarantees identical functionality across:
+  - http://localhost:5173/api/auth/oauth2callback
+  - https://g-class-builder.vercel.app/api/auth/oauth2callback
+  - https://staging-preview.my-domain.com/api/auth/oauth2callback
+
+3.3 Account Picker Enforcement Protocol
+To prevent silent re-authentication with incorrect accounts:
+  authUrl.searchParams.set('prompt', 'select_account consent');
+  authUrl.searchParams.set('access_type', 'offline');
+This forces the identity provider to present the account chooser every single time.
+
+3.4 Session State Lifecycle & Cryptographic Storage
+- Production Edge: Store user session in an encrypted or signed Base64 HTTP-only 
+  cookie (gcb_session) with SameSite=Lax and Max-Age=2592000.
+- Local Engine: Store token.json and user_session.json in local runtime storage.
+- Logout Event: Must simultaneously expire the cookie AND remove all on-disk 
+  token files.
+
+================================================================================
+4. AGENT DECISION & DIAGNOSTIC MATRIX
+================================================================================
+When an agent is tasked with troubleshooting authentication, it must evaluate 
+symptoms against this deterministic triage tree:
+
++---------------------------+---------------------------+----------------------+
+| OBSERVED SYMPTOM          | ROOT CAUSE                | AGENT REMEDY         |
++---------------------------+---------------------------+----------------------+
+| User shows fake email     | Client-side mock fallback | Execute Protocol A:  |
+| without consent screen    | or hardcoded identity     | Strip mock logic;    |
+|                           | branch                    | Bind to /api/auth/me |
++---------------------------+---------------------------+----------------------+
+| Vercel: 404 DNS_HOSTNAME_ | Rewrite targeting         | Execute Protocol D:  |
+| RESOLVED_PRIVATE          | 127.0.0.1 loopback        | Route /api to native |
+|                           |                           | Serverless functions |
++---------------------------+---------------------------+----------------------+
+| Vercel: Function bundle   | Heavy Python libraries    | Execute Protocol B:  |
+| size exceeds 225 MB       | in cloud serverless       | Delete api/index.py; |
+|                           |                           | Use Node serverless  |
++---------------------------+---------------------------+----------------------+
+| Google: Error 400         | Redirect URI mismatch     | Execute Protocol G:  |
+| redirect_uri_mismatch     | between app & Google GCP  | Add exact URL in     |
+|                           | console                   | Cloud Console        |
++---------------------------+---------------------------+----------------------+
+| Google: Error 403         | User not on OAuth         | Execute Protocol G:  |
+| access_denied             | consent screen whitelist  | Add email to test    |
+|                           |                           | users list           |
++---------------------------+---------------------------+----------------------+
+| Git: Push rejected        | Client ID / Secret in     | Execute Protocol E:  |
+| (Rule GH013 Push Protect) | tracked source files      | Extract to env vars; |
+|                           |                           | Amend clean commit   |
++---------------------------+---------------------------+----------------------+
+| Logged-out user instantly | Backend auto-restores     | Execute Protocol C:  |
+| re-appears after reload   | orphaned token.json       | Invalidate all token |
+|                           | files on logout           | files upon signout   |
++---------------------------+---------------------------+----------------------+
+
+================================================================================
+5. AGENT PRE-FLIGHT CHECKLIST (MANDATORY BEFORE ANY EDIT)
+================================================================================
+Before making any changes to an authentication flow, an agent must execute 
+these verification checks:
+
+[ ] 1. Secret Scan: Verify credentials.json, token.json, and *.env files are 
+       listed in .gitignore.
+[ ] 2. Static Safety Audit: Check codebase against the strict NO-DELETE policy:
+       Ensure no course.delete(), coursework.delete(), or roster.delete() exist.
+[ ] 3. Dependency Check: Inspect package.json and requirements.txt to confirm 
+       serverless edge directories have NO heavy compilation dependencies.
+[ ] 4. Clean Branch State: Check git status to ensure working tree is clean or 
+       properly staged before performing atomic edits.
+
+================================================================================
+6. STEP-BY-STEP AGENTIC RESOLUTION PROTOCOLS
+================================================================================
 
 --------------------------------------------------------------------------------
-2.1 Frontend Hardcoded Mock Fallback
+6.1 Protocol A: Frontend Mock Eradication & Strict State Binding
 --------------------------------------------------------------------------------
-In src/App.jsx, the function handleLogin() contained a hostname condition:
-   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-       window.location.href = '/api/auth/google_login';
-   } else {
-       // Hosted Vercel cloud preview fallback
-       const googleUser = {
-           authenticated: true,
-           email: "support@aifoundation.net.au",
-           name: "AI Foundation Instructor",
-           ...
-       };
-       setCurrentUser(googleUser);
-       localStorage.setItem("gcb_user_session", JSON.stringify(googleUser));
+1. Inspect src/App.jsx for any occurrences of:
+   - hardcoded emails in user state
+   - conditional checks bypassing /api/auth/google_login
+   - fallback simulator forms
+2. Standardize handleLogin():
+   const handleLogin = () => {
+     setIsLoggingIn(true);
+     window.location.href = '/api/auth/google_login';
+   };
+3. Standardize checkAuthAndFetchData():
+   - Poll /api/auth/me.
+   - If response.authenticated is true: setCurrentUser(data), sync localStorage.
+   - If response.authenticated is false or HTTP error: setCurrentUser(null), 
+     localStorage.removeItem('gcb_user_session').
+4. Bind URL parameter feedback in initial useEffect:
+   - If window.location.search has auth_success=1 -> show success toast, 
+     clear parameter via window.history.replaceState.
+   - If window.location.search has login_error=... -> show error toast, 
+     clear parameter via window.history.replaceState.
+
+--------------------------------------------------------------------------------
+6.2 Protocol B: Lightweight Edge Auth Gateway Construction
+--------------------------------------------------------------------------------
+For cloud edge targets (Vercel/Netlify), implement native, zero-dependency 
+functions:
+1. api/auth/google_login.js:
+   - Read process.env.GOOGLE_CLIENT_ID.
+   - Build authorization URL targeting https://accounts.google.com/o/oauth2/v2/auth.
+   - Append required scopes, prompt=select_account consent, and access_type=offline.
+   - Issue 302 redirect.
+2. api/auth/oauth2callback.js:
+   - Extract code parameter.
+   - Execute fetch POST to https://oauth2.googleapis.com/token.
+   - Execute fetch GET to https://www.googleapis.com/oauth2/v2/userinfo with Bearer token.
+   - Create user object with authenticated: true, verified email, name, avatar.
+   - Issue Set-Cookie: gcb_session=<base64>; Path=/; HttpOnly; SameSite=Lax.
+   - Issue 302 redirect to /?auth_success=1.
+3. api/auth/me.js:
+   - Read req.headers.cookie for gcb_session.
+   - Parse and return safe user profile. If missing, return { authenticated: false }.
+4. api/auth/logout.js:
+   - Issue Set-Cookie: gcb_session=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT.
+   - Return { success: true, authenticated: false }.
+
+--------------------------------------------------------------------------------
+6.3 Protocol C: Backend Session & Token Lifecycle Hardening
+--------------------------------------------------------------------------------
+For Python / standalone backends (api_server.py):
+1. In /api/auth/google_login:
+   - Enforce: flow.authorization_url(prompt='select_account consent', access_type='offline')
+2. In /api/auth/oauth2callback:
+   - Remove any fallback condition that bypasses code exchange when token.json exists.
+   - Exchange code, fetch user info, save token.json, redirect to /?auth_success=1.
+3. In /api/auth/logout:
+   - Purge ALL token and session files:
+     for p in [USER_SESSION_FILE, TOKEN_FILE, "/tmp/user_session.json", "/tmp/token.json"]:
+         if os.path.exists(p): os.remove(p)
+   - Reset global service clients: GLOBAL_SERVICE = None.
+
+--------------------------------------------------------------------------------
+6.4 Protocol D: Multi-Target Cloud Routing & Boundary Configuration
+--------------------------------------------------------------------------------
+1. In vercel.json:
+   Exempt /api routes from SPA single-page routing:
+   {
+     "version": 2,
+     "buildCommand": "npm run build",
+     "outputDirectory": "dist",
+     "framework": "vite",
+     "rewrites": [
+       { "source": "/((?!api/).*)", "destination": "/index.html" }
+     ]
    }
-Whenever the user accessed the website on Vercel (https://g-class-builder.vercel.app),
-the hostname was not localhost. Therefore, clicking "Sign in with Google Classroom" 
-never redirected to Google. Instead, it instantiated a fake user object and copied
-support@aifoundation.net.au into localStorage.
-
-Additionally, the UI had two legacy elements:
-a) A "TEST IDENTITY SWITCH" block offering buttons to manually switch to 
-   support@aifoundation.net.au.
-b) An "Instant Sign In (Simulator Mode)" input defaulting to support@aifoundation.net.au.
-c) In checkAuthAndFetchData(), the frontend was unconditionally restoring 
-   whatever was in localStorage without verifying with the server if the user 
-   was genuinely authenticated.
+2. In .vercelignore:
+   Ignore heavy Python runtime files while preserving api/*.js:
+   api/__pycache__/
+   api/*.py
+   requirements.txt
+   *.py
+   .venv/
+   credentials*.json
+   token*.json
+   user_session*.json
 
 --------------------------------------------------------------------------------
-2.2 Local Server Auto-Restore of Stale Tokens
+6.5 Protocol E: Secret Isolation & Environment Variable Provisioning
 --------------------------------------------------------------------------------
-In the local backend (api_server.py):
-a) get_current_user_session() had an auto-restore fallback that inspected 
-   candidate token.json files on disk. If a token existed, it refreshed the 
-   token and immediately re-authenticated the session without user action.
-b) In /api/auth/logout, the endpoint deleted user_session.json, but left 
-   token.json intact on disk. Within seconds, the frontend's 10-second polling 
-   loop called /api/auth/me, which found token.json, re-created user_session.json, 
-   and logged the user right back in as support@aifoundation.net.au.
-c) In /api/auth/google_login, authorization_url was called with:
-   prompt='consent' rather than prompt='select_account consent'.
-   Without select_account, Google did not display the account picker, silently 
-   reusing whichever Google account was active in the browser.
+1. Remove all hardcoded string secrets from source files.
+2. In serverless functions, read:
+   process.env.GOOGLE_CLIENT_ID
+   process.env.GOOGLE_CLIENT_SECRET
+3. Provision environment variables in cloud project settings across all 
+   environments (Production, Preview, Development).
 
 --------------------------------------------------------------------------------
-2.3 The Vercel Python 225 MB Function Limit Dilemma
+6.6 Protocol F: Automated Verification & Smoke Testing Harness
 --------------------------------------------------------------------------------
-When attempting to deploy the Python backend directly to Vercel via api/index.py, 
-Vercel's Python builder installed requirements.txt (which included pandas, 
-numpy, openpyxl, and google-api-python-client).
-The combined bundle was 294.50 MB, which triggered a fatal Vercel build error:
-"Total bundle size (294.50 MB) exceeds the maximum function size (225 MB)."
-This had previously led to disabling the cloud API and creating the mock fallback.
+Execute the following verification suite after any deployment:
 
---------------------------------------------------------------------------------
-2.4 The Vercel Routing Collision (404 DNS_HOSTNAME_RESOLVED_PRIVATE)
---------------------------------------------------------------------------------
-In earlier vercel.json configurations, rewrites attempted to forward:
-/api/(.*) -> http://127.0.0.1:8000/api/$1
-On Vercel edge nodes (e.g. syd1), loopback addresses (127.0.0.1, localhost) 
-are strictly blocked for security, resulting in the error:
-"404 DNS_HOSTNAME_RESOLVED_PRIVATE".
+1. Verification Test 1: Unauthenticated Session Inspection
+   Command:
+     curl.exe -s https://<DEPLOYED_DOMAIN>/api/auth/me
+   Expected Output:
+     {"authenticated":false,"email":null,"name":null,"role":null}
 
---------------------------------------------------------------------------------
-2.5 GitHub Push Protection & Secret Scanning Rejection
---------------------------------------------------------------------------------
-When implementing new serverless functions, hardcoding Google Client IDs or 
-Secrets in any commit was immediately rejected by GitHub Push Protection 
-(Rule GH013: "Push cannot contain secrets"). All OAuth credentials had to be 
-dynamically sourced from secure environment variables.
+2. Verification Test 2: OAuth Redirection Validation
+   Command:
+     curl.exe -s -v https://<DEPLOYED_DOMAIN>/api/auth/google_login 2>&1 | Select-String "Location:"
+   Expected Output:
+     Location: https://accounts.google.com/o/oauth2/v2/auth?...&prompt=select_account+consent...
+
+3. Verification Test 3: Local Status & Safety Enforcement Audit
+   Command:
+     curl.exe -s http://127.0.0.1:8000/api/test
+   Expected Output:
+     {"passed":true,"violations":[],"message":"NO-DELETE audit passed: 0 delete calls found."}
 
 ================================================================================
-3. STEP-BY-STEP RESOLUTION EXPLANATION (EVERY ACTION TAKEN)
+7. RE-OCCURRENCE MITIGATION & SELF-HEALING PROCEDURES
 ================================================================================
 
---------------------------------------------------------------------------------
-3.1 Step 1: Removal of All Mock & Simulator Code from the Frontend
---------------------------------------------------------------------------------
-File: src/App.jsx
-Actions:
-- Rewrote handleLogin() to unconditionally trigger real authentication:
-  const handleLogin = () => {
-    setIsLoggingIn(true);
-    window.location.href = '/api/auth/google_login';
-  };
-- Completely removed handleEmailLogin(), the "Simulator Mode" input field, and 
-  the "TEST IDENTITY SWITCH" buttons.
-- Updated checkAuthAndFetchData() so that /api/auth/me is the single source of truth:
-  If the API returns authenticated: true, the state and localStorage are updated.
-  If the API returns authenticated: false, state is set to null and localStorage 
-  is wiped immediately.
-- Added URL parameter inspection in useEffect:
-  If ?auth_success=1 is present, shows a success toast and cleans the URL via 
-  window.history.replaceState.
-  If ?login_error=... is present, shows the error message in a toast.
+7.1 Handling "redirect_uri_mismatch"
+- Error Symptom: Google OAuth screen displays Error 400: redirect_uri_mismatch.
+- Autonomous Diagnosis: The active origin + "/api/auth/oauth2callback" is missing 
+  from the GCP Web Client's Authorized redirect URIs.
+- Resolution Action:
+  1. Open Google Cloud Console > APIs & Services > Credentials.
+  2. Select OAuth 2.0 Web Client ID.
+  3. Under Authorized JavaScript origins, add:
+     https://<DEPLOYED_DOMAIN>
+  4. Under Authorized redirect URIs, add:
+     https://<DEPLOYED_DOMAIN>/api/auth/oauth2callback
+     (Ensure no trailing slash).
+  5. Click Save.
 
---------------------------------------------------------------------------------
-3.2 Step 2: Elimination of the Heavy Python Serverless Entrypoint
---------------------------------------------------------------------------------
-File: api/index.py
-Action:
-- Deleted api/index.py from the repository.
-- This prevented Vercel from attempting to install pandas/numpy/scipy or invoke 
-  the Python build runtime, avoiding the 225 MB size limit entirely.
+7.2 Handling "access_denied" (OAuth Consent Screen Quotas)
+- Error Symptom: Google OAuth displays Error 403: access_denied.
+- Autonomous Diagnosis: GCP OAuth Consent Screen is in "Testing" publishing status, 
+  and the authenticating user is not in the Test Users whitelist.
+- Resolution Action:
+  1. Open Google Cloud Console > APIs & Services > OAuth consent screen.
+  2. Locate "Test users" table.
+  3. Click "+ ADD USERS".
+  4. Add the target email address and save.
 
---------------------------------------------------------------------------------
-3.3 Step 3: Architecture of Lightweight Node.js Serverless Functions for Vercel
---------------------------------------------------------------------------------
-Files Created:
-- api/auth/google_login.js:
-  Dynamically reads host from x-forwarded-host or host header.
-  Constructs redirectUri: `${proto}://${host}/api/auth/oauth2callback`.
-  Attaches Classroom scopes:
-  - https://www.googleapis.com/auth/classroom.courses
-  - https://www.googleapis.com/auth/classroom.topics
-  - https://www.googleapis.com/auth/classroom.coursework.students
-  - https://www.googleapis.com/auth/classroom.courseworkmaterials
-  - https://www.googleapis.com/auth/classroom.announcements
-  - https://www.googleapis.com/auth/classroom.rosters.readonly
-  - openid, https://www.googleapis.com/auth/userinfo.email, https://www.googleapis.com/auth/userinfo.profile
-  Appends prompt='select_account consent' and access_type='offline'.
-  Sends a 302 redirect directly to accounts.google.com.
+7.3 Handling Stale Disk/Cookie Desynchronization
+- Error Symptom: Developer reports local workstation is stuck logged in as an 
+  old identity.
+- Resolution Action:
+  1. Stop dev server.
+  2. In terminal:
+     Remove-Item "user_session.json", "token.json" -Force -ErrorAction SilentlyContinue
+  3. Clear browser cookies / localStorage for localhost:5173.
+  4. Restart runner: npm run dev.
 
-- api/auth/oauth2callback.js:
-  Extracts code from query parameters.
-  Performs server-to-server POST to https://oauth2.googleapis.com/token.
-  Queries https://www.googleapis.com/oauth2/v2/userinfo with the access token.
-  Extracts genuine user details: email, name, avatar picture.
-  Encodes user session into base64 and sets an HTTP-only cookie (gcb_session) 
-  with SameSite=Lax and 30-day expiry.
-  Sends a 302 redirect to /?auth_success=1.
-
-- api/auth/me.js:
-  Reads and decodes the gcb_session cookie.
-  Returns { authenticated: true, email, name, avatar, role, domain }.
-  If cookie is missing or invalid, returns { authenticated: false }.
-
-- api/auth/logout.js:
-  Clears the gcb_session cookie with an expired timestamp.
-  Returns { success: true, authenticated: false }.
-
-- api/status.js:
-  Returns { status: "online", mode: "Live Google Classroom API", no_delete_policy_enforced: true }.
-
-- api/courses.js:
-  Inspects the user's access token in gcb_session and queries 
-  https://classroom.googleapis.com/v1/courses for their active courses.
-
-Bundle Size:
-- Less than 15 KB total. Zero third-party dependencies (uses native Node.js fetch, 
-  URLSearchParams, Buffer). Deploys in under 15 seconds.
-
---------------------------------------------------------------------------------
-3.4 Step 4: Local Python Server Hardening (api_server.py)
---------------------------------------------------------------------------------
-File: api_server.py
-Actions:
-- In /api/auth/google_login:
-  Changed flow.authorization_url(prompt='consent') to:
-  flow.authorization_url(prompt='select_account consent', access_type='offline')
-  This forces the browser to prompt the user to choose their Google account.
-- In /api/auth/oauth2callback:
-  Removed the bypass condition that accepted missing codes if token.json existed.
-  Redirects to /?auth_success=1 upon verified token exchange.
-- In /api/auth/logout:
-  Modified logout handler to delete both USER_SESSION_FILE and TOKEN_FILE 
-  (along with all /tmp/token.json candidates), and set GLOBAL_SERVICE = None.
-  This permanently prevents the server from auto-restoring an old session.
-
---------------------------------------------------------------------------------
-3.5 Step 5: Vercel Routing Configuration (vercel.json & .vercelignore)
---------------------------------------------------------------------------------
-File: vercel.json
-- Modified rewrites to exclude /api routes from the single-page application index:
-  "rewrites": [
-    {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
-    }
-  ]
-  This ensures /api/auth/* is routed to serverless functions, while all other 
-  routes load the Vite frontend.
-
-File: .vercelignore
-- Removed the broad "api/" ignore rule so Vercel includes api/*.js.
-- Added precise ignore patterns for Python assets:
-  api/__pycache__/
-  api/*.py
-  requirements.txt
-  *.py
-  *.xlsx
-  .venv/
-  credentials*.json
-  token*.json
-  user_session*.json
-
---------------------------------------------------------------------------------
-3.6 Step 6: GitHub Secret Protection Compliance (Zero Hardcoded Secrets)
---------------------------------------------------------------------------------
-Files: api/auth/google_login.js, api/auth/oauth2callback.js
-- Removed hardcoded Client ID and Secret string literals.
-- Sourced credentials via process.env.GOOGLE_CLIENT_ID and 
-  process.env.GOOGLE_CLIENT_SECRET, with a safe fallback to local credentials.json 
-  (which is strictly gitignored).
-- Amended commit and pushed cleanly to remote main branch without secret leaks.
-
---------------------------------------------------------------------------------
-3.7 Step 7: Vercel Cloud Environment Variables Injection
---------------------------------------------------------------------------------
-Using Vercel MCP Tool create_project_env:
-- Injected GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET as encrypted variables 
-  targeting production, preview, and development environments in the g-class-builder project.
-
---------------------------------------------------------------------------------
-3.8 Step 8: Vercel Production Redeployment & Verification
---------------------------------------------------------------------------------
-Using Vercel MCP Tool create_deployment:
-- Triggered a fresh production deployment (deploymentId dpl_Ddn1UtwRfoxqLMse5RPj8E7J377E).
-- Verified build state: READY.
-- Verified via curl:
-  a) https://g-class-builder.vercel.app/api/auth/me returns 200 with authenticated: false.
-  b) https://g-class-builder.vercel.app/api/auth/google_login returns 302 redirect 
-     pointing directly to https://accounts.google.com/o/oauth2/v2/auth with 
-     prompt=select_account+consent.
-
---------------------------------------------------------------------------------
-3.9 Step 9: Google Cloud Console Redirect URI Alignment
---------------------------------------------------------------------------------
-Instructed addition of:
-- Authorized JavaScript Origin: https://g-class-builder.vercel.app
-- Authorized Redirect URI:       https://g-class-builder.vercel.app/api/auth/oauth2callback
-within Google Cloud Console under the Web Client ID credentials.
+7.4 Handling Strict Safety & Policy Enforcements (NO-DELETE Policy)
+- Invariant: Google Classroom Course Builder enforces a strict NO-DELETE policy.
+- Automated Rule: No endpoint, UI component, or API adapter may delete courses, 
+  topics, student rosters, or classroom coursework.
+- Pre-Deployment Gate: If git grep -i "\.delete(" matches any Classroom API calls, 
+  block deployment immediately.
 
 ================================================================================
-4. STANDARD OPERATING PROCEDURE (SOP): INSTRUCTIONS TO FOLLOW EVERY TIME THIS OCCURS
+8. AGENTIC ENVIRONMENT REFERENCE MANIFEST
 ================================================================================
-
-If authentication ever fails, displays an unexpected user, or returns an error, 
-follow this exact checklist in sequence:
-
+Parameter Name                Standard Configuration / Value
 --------------------------------------------------------------------------------
-4.1 Phase 1: Diagnosing the Symptom
---------------------------------------------------------------------------------
-1. Check what the browser URL displays:
-   - If the URL contains "?login_error=...", read the message.
-   - If the error is "redirect_uri_mismatch", proceed to Phase 2.
-   - If the error is "access_denied", proceed to Phase 3.
-2. Check network requests in Browser DevTools (F12 > Network):
-   - Click "Sign in with Google Classroom".
-   - Confirm the first request goes to "/api/auth/google_login" and returns HTTP 302.
-   - Inspect the "Location" response header. It MUST begin with "https://accounts.google.com/".
-   - If it redirects to "/" or sets a simulated user, check src/App.jsx for any rogue mock code.
-
---------------------------------------------------------------------------------
-4.2 Phase 2: Resolving Google Cloud Console "Error 400: redirect_uri_mismatch"
---------------------------------------------------------------------------------
-Cause: The URL where Google sends the authorization code does not match the list 
-       in Google Cloud Console character-for-character.
-
-Fix:
-1. Open Google Cloud Console:
-   https://console.cloud.google.com/apis/credentials
-2. Select your project (e.g. gen-lang-client-0551298781).
-3. Click your OAuth 2.0 Client ID (Web application).
-4. Verify Authorized JavaScript origins:
-   http://localhost:5173
-   http://127.0.0.1:5173
-   https://g-class-builder.vercel.app
-5. Verify Authorized redirect URIs:
-   http://localhost:5173/api/auth/oauth2callback
-   https://g-class-builder.vercel.app/api/auth/oauth2callback
-   * CRITICAL: Do NOT add trailing slashes (e.g. no "/api/auth/oauth2callback/").
-6. Click SAVE. Changes take effect within 60-120 seconds.
-
---------------------------------------------------------------------------------
-4.3 Phase 3: Resolving "Error 403: access_denied" (Test User Limitation)
---------------------------------------------------------------------------------
-Cause: While your Google Cloud OAuth Consent Screen is in "Testing" mode, Google 
-       rejects any Google account that is not explicitly whitelisted.
-
-Fix:
-1. Open OAuth Consent Screen in Google Cloud Console:
-   https://console.cloud.google.com/apis/credentials/consent
-2. Scroll to "Test users".
-3. Click "+ ADD USERS".
-4. Enter the email address of every teacher, tester, or personal account needing access:
-   - support@aifoundation.net.au
-   - (your personal Gmail or work Google Workspace email)
-5. Click SAVE.
-
---------------------------------------------------------------------------------
-4.4 Phase 4: Local Environment Reset (Clearing Stale Tokens)
---------------------------------------------------------------------------------
-If local development is stuck remembering an old session:
-1. Stop the running dev runner:
-   Run task manager or kill task in terminal.
-2. Delete cached local token and session files:
-   In PowerShell:
-   Remove-Item -Path "user_session.json", "token.json" -Force -ErrorAction SilentlyContinue
-3. Open browser DevTools on http://localhost:5173:
-   Application > Storage > Clear Site Data (or clear localStorage and Cookies).
-4. Restart the fullstack runner:
-   npm run dev (or node dev-runner.mjs)
-5. Visit http://localhost:5173. The top bar will show "Not Signed In".
-6. Click "Sign in with Google Classroom" to authenticate cleanly.
-
---------------------------------------------------------------------------------
-4.5 Phase 5: Vercel Environment Variables Verification
---------------------------------------------------------------------------------
-If Vercel cloud returns "?login_error=GOOGLE_CLIENT_ID is not configured":
-1. Open Vercel Project Settings:
-   https://vercel.com/aifoundationau/g-class-builder/settings/environment-variables
-2. Verify both variables exist across Production, Preview, and Development:
-   - GOOGLE_CLIENT_ID:     (Set to your GCP Web Client ID, e.g., 102300054859-...apps.googleusercontent.com)
-   - GOOGLE_CLIENT_SECRET: (Set to your GCP Client Secret, e.g., GOCSPX-...)
-3. If added or updated, click "Deployments" > latest deployment > "Redeploy" to apply.
-
---------------------------------------------------------------------------------
-4.6 Phase 6: Code Base Safety Audit (Enforcing the NO-DELETE Policy)
---------------------------------------------------------------------------------
-Under AI Foundation policy, this codebase enforces a strict NO-DELETE policy 
-across all Google Classroom API interactions.
-To verify safety integrity before any deployment:
-1. Run the safety audit endpoint:
-   curl.exe http://127.0.0.1:8000/api/test
-2. Output must show:
-   {"passed": true, "violations": [], "message": "NO-DELETE audit passed: 0 delete calls found."}
-3. Never introduce any calls to .delete() on courses, courseWork, courseWorkMaterials, 
-   announcements, or rosters.
+Primary Identity Provider     Google Identity Services / OAuth 2.0
+Client ID Configuration       process.env.GOOGLE_CLIENT_ID
+Client Secret Configuration   process.env.GOOGLE_CLIENT_SECRET
+Local Dev UI Origin           http://localhost:5173
+Local Dev API Origin          http://127.0.0.1:8000
+Local Dev Callback URI        http://localhost:5173/api/auth/oauth2callback
+Cloud Production Host         Dynamic (e.g. https://g-class-builder.vercel.app)
+Cloud Production Callback URI Dynamic (e.g. /api/auth/oauth2callback)
+Session Cookie Identifier     gcb_session
+Session Cookie Attributes     Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000
+OAuth Authorization Endpoint  https://accounts.google.com/o/oauth2/v2/auth
+OAuth Token Exchange Endpoint https://oauth2.googleapis.com/token
+OAuth UserInfo Endpoint       https://www.googleapis.com/oauth2/v2/userinfo
+Safety Audit Endpoint         GET /api/test
+Health & System Endpoint      GET /api/status
 
 ================================================================================
-5. REFERENCE ARCHITECTURE & CONFIGURATION VALUES
-================================================================================
-Client ID:
-Configured via GOOGLE_CLIENT_ID in Vercel & local credentials.json
-
-GCP Project ID:
-gen-lang-client-0551298781
-
-Live Production URL:
-https://g-class-builder.vercel.app
-
-Local Dev URL:
-http://localhost:5173
-
-Production Redirect URI:
-https://g-class-builder.vercel.app/api/auth/oauth2callback
-
-Local Redirect URI:
-http://localhost:5173/api/auth/oauth2callback
-
-Required Scopes:
-- https://www.googleapis.com/auth/classroom.courses
-- https://www.googleapis.com/auth/classroom.topics
-- https://www.googleapis.com/auth/classroom.coursework.students
-- https://www.googleapis.com/auth/classroom.courseworkmaterials
-- https://www.googleapis.com/auth/classroom.announcements
-- https://www.googleapis.com/auth/classroom.rosters.readonly
-- openid
-- https://www.googleapis.com/auth/userinfo.email
-- https://www.googleapis.com/auth/userinfo.profile
-
-================================================================================
-END OF GUIDE
+END OF AGENTIC SPECIFICATION
 ================================================================================
