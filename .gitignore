@@ -39,6 +39,8 @@ GCourseBuilder.spec
 # Vite and Test Caches
 .vite/
 .vite-temp/
+.npm-cache/
+*.tgz
 
 # Logs & Temporary files
 npm-debug.log*

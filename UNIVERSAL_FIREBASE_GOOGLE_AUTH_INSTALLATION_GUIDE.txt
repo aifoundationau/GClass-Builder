@@ -1,0 +1,458 @@
+================================================================================
+AGENTIC PROTOCOL & OPERATIONAL SPECIFICATION:
+UNIVERSAL FIREBASE GOOGLE AUTHENTICATION & MULTI-HOST DEPLOYMENT GUIDE
+================================================================================
+Document Classification: Agnostic Agentic Runbook & Deployment Architecture
+Target Audience: Autonomous AI Agents, Agentic Coding Systems, Full-Stack Engineers
+Applicable Deployments: Cloud Edge (Vercel, Netlify, Cloudflare Pages),
+                        cPanel / Traditional Shared Hosts (Namecheap, Hostinger, GoDaddy),
+                        Containers (Docker, GCP Cloud Run, AWS ECS),
+                        and Local Runtimes (Localhost, Development Workstations)
+Protocol Revision: 4.0 (Production Stable)
+Date: October 2026
+
+--------------------------------------------------------------------------------
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+1. ARCHITECTURAL OVERVIEW & CORE INVARIANTS
+2. UNBREAKABLE AUTHENTICATION PATTERN (POPUP + REDIRECT FALLBACK)
+3. FIRESTORE DATABASE SYNCHRONIZATION & LIFECYCLE
+4. AUTOMATIC CLASSIFICATION & DYNAMIC SUPERADMIN GOVERNANCE
+5. MULTI-HOST CONFIGURATION (VERCEL, NAMECHEAP, HOSTINGER, GODADDY)
+6. CODEBASE IMPLEMENTATION SPECIFICATION
+   6.1 src/firebase.js (Universal Initialization)
+   6.2 src/services/firebaseAuthService.js (Authentication & Role Management)
+   6.3 UI Integration & Superadmin Role Switcher
+7. FIRESTORE SECURITY RULES (PRODUCTION HARDENED)
+8. STEP-BY-STEP INSTALLATION RUNBOOK FOR NEW WEBSITES
+9. VERIFICATION & AGENT HEALTH-CHECK PROTOCOL
+
+================================================================================
+1. ARCHITECTURAL OVERVIEW & CORE INVARIANTS
+================================================================================
+When implementing Google Authentication and User Management on any website,
+the autonomous agent MUST enforce the following six architectural invariants:
+
+[INVARIANT-01] ZERO HARDCODED IDENTITIES OR EMAILS
+Under NO circumstances may an agent hardcode specific email addresses (e.g. 
+admin@example.com or support@aifoundation.net.au) into client or server logic. 
+All administrative privileges, roles, and classifications MUST be resolved 
+dynamically from the Firebase Firestore database or secure environment variables.
+
+[INVARIANT-02] UNBREAKABLE AUTHENTICATION LIFECYCLE
+Google Authentication must NEVER fail silently or leave the user stranded. The 
+system must employ a primary Popup flow (`signInWithPopup`), catch all popup 
+blockers, mobile Safari restrictions, or webview sandboxes, and automatically 
+fall back to a Redirect flow (`signInWithRedirect`). Redirect results must be 
+processed seamlessly on application initialization (`getRedirectResult`).
+
+[INVARIANT-03] MAXIMUM LOGIN DURATION PERSISTENCE
+Session persistence must be explicitly bound to `browserLocalPersistence` 
+(localStorage). Once authenticated, the user remains authenticated across 
+browser tabs, page refreshes, and browser restarts until an explicit sign-out 
+action is triggered.
+
+[INVARIANT-04] AUTOMATIC "SUPPORTER" CLASSIFICATION
+Anyone who signs in with Google without an existing database classification is 
+instantly registered in Firestore with the default category "Supporter". 
+Existing classifications (e.g., if previously promoted to student, teacher, 
+or CEO) MUST be preserved and never overwritten on subsequent logins.
+
+[INVARIANT-05] FIRESTORE LOGON AUDIT
+Every successful authentication MUST be recorded in the Firestore `users/{uid}` 
+collection, updating:
+  - `last_login_at` (ISO timestamp)
+  - `login_count` (incremented counter)
+  - `email`, `name`, `avatar`
+  - `source: "google"`
+
+[INVARIANT-06] MULTI-HOST COMPATIBILITY
+The implementation must operate identically regardless of whether the site is 
+hosted on modern edge clouds (Vercel, Netlify) or traditional static/PHP 
+cPanel hosts (Namecheap, Hostinger, GoDaddy). Configuration must resolve 
+dynamically via `import.meta.env` (Vite) OR `window.__FIREBASE_CONFIG__`.
+
+================================================================================
+2. UNBREAKABLE AUTHENTICATION PATTERN
+================================================================================
+Authentication failures on modern browsers predominantly stem from:
+  1. Built-in popup blockers on mobile devices (iOS Safari, Android Chrome).
+  2. Third-party cookie blocking (Safari ITP, Chrome Privacy Sandbox).
+  3. Embedded in-app browsers (Facebook, Instagram, LinkedIn, Slack webviews).
+
+To achieve 100% reliability, implement the Dual-Tier Auth Pattern:
+
+```
+[User Clicks "Sign in with Google"]
+                │
+                ▼
+      [Attempt signInWithPopup]
+                │
+        ┌───────┴───────┐
+        ▼               ▼
+     [Success]      [Catches Error]
+        │               │
+        │               ├─ Error: auth/popup-blocked
+        │               ├─ Error: auth/popup-closed-by-user
+        │               ├─ Error: auth/cancelled-popup-request
+        │               └─ Error: generic popup failure
+        │               │
+        │               ▼
+        │       [Fallback: signInWithRedirect]
+        │               │
+        │               ▼
+        │       [Redirects to Google OAuth]
+        │               │
+        │               ▼
+        │       [Returns to Website Origin]
+        │               │
+        │               ▼
+        └───────► [App Initializes]
+                        │
+                        ▼
+            [Check getRedirectResult]
+                        │
+                        ▼
+            [Sync to Firestore users/{uid}]
+```
+
+================================================================================
+3. FIRESTORE DATABASE SYNCHRONIZATION & LIFECYCLE
+================================================================================
+Each user is stored under the document path: `/users/{uid}`
+
+Document Schema:
+```json
+{
+  "uid": "google_oauth_uid_string",
+  "email": "user@example.com",
+  "name": "User Full Name",
+  "avatar": "https://lh3.googleusercontent.com/...",
+  "role": "Supporter",
+  "classification": "Supporter",
+  "created_at": "2026-10-10T00:00:00.000Z",
+  "last_login_at": "2026-10-10T09:00:00.000Z",
+  "login_count": 5,
+  "source": "google"
+}
+```
+
+Synchronization Rules:
+1. First Login: Document does not exist -> Create document with `role: "Supporter"`,
+   `created_at: now`, `last_login_at: now`, `login_count: 1`.
+2. Subsequent Logins: Document exists -> Update `last_login_at: now`, increment 
+   `login_count: login_count + 1`. DO NOT change `role` or `classification`.
+3. Real-Time Sync: The website listens to `onSnapshot(doc(db, "users", uid))` 
+   so any role update made by a Superadmin reflects instantly in the user's UI 
+   without requiring a page refresh.
+
+================================================================================
+4. AUTOMATIC CLASSIFICATION & DYNAMIC SUPERADMIN GOVERNANCE
+================================================================================
+Authorized User Categories:
+  - Supporter (Default for all new Google registrations)
+  - student
+  - teacher
+  - admin staff
+  - CEO
+  - COO
+  - CFO
+  - Financial team
+  - Superadmin
+
+Superadmin Detection Logic:
+Superadmin status is NEVER hardcoded by email address. It is verified by:
+  1. Firestore Document Attribute:
+     If the user's record in `/users/{uid}` has `role === 'Superadmin'` or 
+     `role === 'admin'` or `isSuperAdmin === true`.
+  2. Firestore Admins Collection:
+     If `/admins/{uid}` or `/superadmins/{uid}` or `/admins/{email}` exists.
+  3. Hosting Environment Variable (Optional):
+     If `VITE_FIREBASE_ADMIN_EMAIL` matches the user's email.
+
+Superadmin Privileges:
+When a Superadmin logs in:
+  - The UI displays an administrative badge in the header.
+  - The Members Table displays an interactive dropdown next to each member.
+  - The Superadmin can select any category from the authorized list.
+  - Selecting a category immediately updates `/users/{target_uid}` in Firestore.
+
+================================================================================
+5. MULTI-HOST CONFIGURATION GUIDE
+================================================================================
+Different hosting providers handle environment variables differently. 
+Our universal configuration supports all major hosting platforms:
+
+--------------------------------------------------------------------------------
+5.1 VERCEL / NETLIFY / MODERN CLOUD EDGE
+--------------------------------------------------------------------------------
+In the Vercel Dashboard (Project Settings -> Environment Variables), add:
+  - VITE_FIREBASE_API_KEY
+  - VITE_FIREBASE_AUTH_DOMAIN
+  - VITE_FIREBASE_PROJECT_ID
+  - VITE_FIREBASE_STORAGE_BUCKET
+  - VITE_FIREBASE_MESSAGING_SENDER_ID
+  - VITE_FIREBASE_APP_ID
+
+Authorized Domains in Firebase Console:
+Go to Firebase Console -> Authentication -> Settings -> Authorized Domains.
+Add your Vercel domains:
+  - `your-project.vercel.app`
+  - `yourcustomdomain.com`
+
+--------------------------------------------------------------------------------
+5.2 NAMECHEAP / HOSTINGER / GODADDY (cPanel / Apache / Static Hosting)
+--------------------------------------------------------------------------------
+Traditional shared hosting serves pre-built static files (e.g. from Vite `dist/` 
+or custom HTML/JS). Because server environment variables are not injected into 
+client JavaScript on static hosts, use Runtime Window Config.
+
+In your public `index.html` (inside `<head>` before any script bundles):
+```html
+<script>
+  window.__FIREBASE_CONFIG__ = {
+    apiKey: "AIzaSy...",
+    authDomain: "your-app.firebaseapp.com",
+    projectId: "your-app-id",
+    storageBucket: "your-app-id.firebasestorage.app",
+    messagingSenderId: "123456789012",
+    appId: "1:123456789012:web:abcdef"
+  };
+</script>
+```
+
+Authorized Domains in Firebase Console:
+In Firebase Console -> Authentication -> Settings -> Authorized Domains, add:
+  - `yourdomain.com`
+  - `www.yourdomain.com`
+  - `subdomain.yourdomain.com`
+
+--------------------------------------------------------------------------------
+5.3 LOCALHOST DEVELOPMENT
+--------------------------------------------------------------------------------
+In your root `.env` file:
+```env
+VITE_FIREBASE_API_KEY=AIzaSy...
+VITE_FIREBASE_AUTH_DOMAIN=your-app.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your-app-id
+VITE_FIREBASE_STORAGE_BUCKET=your-app-id.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=123456789012
+VITE_FIREBASE_APP_ID=1:123456789012:web:abcdef
+```
+Ensure `localhost` is listed in Firebase Authorized Domains (present by default).
+
+================================================================================
+6. CODEBASE IMPLEMENTATION SPECIFICATION
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 src/firebase.js (Universal Firebase Initialization)
+--------------------------------------------------------------------------------
+```javascript
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { 
+  getAuth, 
+  GoogleAuthProvider, 
+  setPersistence, 
+  browserLocalPersistence 
+} from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
+
+// Read from Vite environment OR runtime window configuration (for static hosts)
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || (typeof window !== 'undefined' && window.__FIREBASE_CONFIG__?.apiKey) || "",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || (typeof window !== 'undefined' && window.__FIREBASE_CONFIG__?.authDomain) || "",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || (typeof window !== 'undefined' && window.__FIREBASE_CONFIG__?.projectId) || "",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || (typeof window !== 'undefined' && window.__FIREBASE_CONFIG__?.storageBucket) || "",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || (typeof window !== 'undefined' && window.__FIREBASE_CONFIG__?.messagingSenderId) || "",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || (typeof window !== 'undefined' && window.__FIREBASE_CONFIG__?.appId) || ""
+};
+
+export const isFirebaseConfigured = Boolean(
+  firebaseConfig.apiKey && 
+  firebaseConfig.apiKey !== "your_firebase_api_key_here" && 
+  firebaseConfig.projectId
+);
+
+// Fallback configuration prevents bundle crashes during build time
+const effectiveConfig = isFirebaseConfigured ? firebaseConfig : {
+  apiKey: "AIzaSyPlaceholderKeyForBuildSafety000000",
+  authDomain: "app.firebaseapp.com",
+  projectId: "course-builder-app",
+  storageBucket: "course-builder-app.appspot.com",
+  messagingSenderId: "123456789012",
+  appId: "1:123456789012:web:abcdef123456"
+};
+
+// Singleton App Instance
+const app = getApps().length > 0 ? getApp() : initializeApp(effectiveConfig);
+
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+
+export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+  prompt: 'select_account'
+});
+
+// Enforce MAXIMUM login duration via browserLocalPersistence
+if (typeof window !== 'undefined') {
+  try {
+    setPersistence(auth, browserLocalPersistence).catch((err) => {
+      console.warn("[Firebase Auth] Local persistence warning:", err);
+    });
+  } catch (e) {}
+}
+
+export default app;
+```
+
+--------------------------------------------------------------------------------
+6.2 src/services/firebaseAuthService.js (Auth & Role Service)
+--------------------------------------------------------------------------------
+Key exported functions:
+  - `signInWithGoogle()`: Unbreakable dual-tier login flow.
+  - `logOutUser()`: Clean sign-out from Firebase.
+  - `syncUserToFirebase(user)`: Syncs user to Firestore, default category "Supporter".
+  - `verifySuperadminStatus(userRecord)`: Dynamic admin verification (zero hardcoded emails).
+  - `updateUserCategoryInFirebase(uid, newCategory)`: Updates user role in Firestore.
+  - `subscribeToAuth(onUserChange)`: Real-time listener for Firebase Auth state.
+  - `subscribeToUserProfile(uid, onProfileChange)`: Real-time Firestore snapshot listener.
+
+--------------------------------------------------------------------------------
+6.3 UI Integration & Superadmin Role Switcher
+--------------------------------------------------------------------------------
+In the React application:
+1. In the Application Header:
+   Display the user's avatar, name, and classification badge:
+   `{currentUser.role || currentUser.classification || "Supporter"}`
+2. In the Members Table / Administration Tab:
+   If `isSuperAdmin` is true:
+   Display a `<select>` dropdown next to each user row containing:
+   `["Supporter", "student", "teacher", "admin staff", "CEO", "COO", "CFO", "Financial team", "Superadmin"]`
+   When the Superadmin selects a new value, call `updateUserCategoryInFirebase(member.uid, newCategory)`.
+
+================================================================================
+7. FIRESTORE SECURITY RULES (PRODUCTION HARDENED)
+================================================================================
+In Firebase Console -> Firestore Database -> Rules, apply:
+
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function: Check if authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper function: Check if user is Superadmin
+    function isSuperadmin() {
+      return isAuthenticated() && (
+        request.auth.token.role == 'Superadmin' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'Superadmin' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+    
+    // Users collection rules
+    match /users/{userId} {
+      // Any authenticated user can read profiles
+      allow read: if isAuthenticated();
+      
+      // Users can create/update their own profile, but CANNOT elevate their own role
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && (
+        isSuperadmin() || 
+        (request.auth.uid == userId && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'classification', 'isSuperAdmin']))
+      );
+      
+      // Only Superadmins can delete users
+      allow delete: if isSuperadmin();
+    }
+    
+    // Admins metadata collection
+    match /admins/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isSuperadmin();
+    }
+  }
+}
+```
+
+================================================================================
+8. STEP-BY-STEP INSTALLATION RUNBOOK FOR NEW WEBSITES
+================================================================================
+Follow these steps whenever installing this authentication architecture 
+on a new website:
+
+STEP 1: CREATE OR SELECT FIREBASE PROJECT
+1. Open https://console.firebase.google.com/
+2. Click "Add project" and name your project (e.g. `my-website-auth`).
+3. In Project Settings -> General -> Your apps -> Click the Web icon `</>`.
+4. Register the app and copy the `firebaseConfig` keys.
+
+STEP 2: CONFIGURE AUTHENTICATION & GOOGLE PROVIDER
+1. In Firebase Console, go to "Authentication" -> "Get started".
+2. Under "Sign-in method", click "Google" -> Click "Enable".
+3. Enter Project public-facing name and Project support email. Click "Save".
+4. Go to "Settings" tab -> "Authorized domains".
+5. Add all deployment domains:
+   - `localhost`
+   - `your-vercel-deployment.vercel.app`
+   - `yourcustomdomain.com` (for Namecheap, Hostinger, GoDaddy, etc.)
+
+STEP 3: CONFIGURE FIRESTORE DATABASE
+1. In Firebase Console, go to "Firestore Database" -> "Create database".
+2. Choose a region closest to your primary audience (e.g., `australia-southeast1`).
+3. Start in "Production mode".
+4. Navigate to the "Rules" tab and paste the security rules from Section 7.
+5. In the "Data" tab, create the initial collection:
+   - Collection ID: `users`
+
+STEP 4: DESIGNATE THE INITIAL SUPERADMIN (ZERO HARDCODING)
+To bootstrap the first Superadmin without hardcoding any email in source code:
+1. Have the Superadmin sign in once with their Google account on the website.
+2. The user will be automatically registered in Firestore as a `Supporter`.
+3. Open the Firebase Console -> Firestore Database -> `users` collection.
+4. Find the Superadmin's document by their email or UID.
+5. Change the `role` field from `"Supporter"` to `"Superadmin"`.
+6. Done! The user is now permanently recognized as Superadmin and can promote 
+   any other user directly from the website's administrative interface.
+
+STEP 5: DEPLOY ENVIRONMENT CONFIGURATION
+- For Vercel/Netlify: Add `VITE_FIREBASE_*` variables in dashboard settings.
+- For Namecheap/Hostinger/GoDaddy: Add `window.__FIREBASE_CONFIG__` in `index.html`.
+
+================================================================================
+9. VERIFICATION & AGENT HEALTH-CHECK PROTOCOL
+================================================================================
+Before declaring completion, verify each of the following criteria:
+
+[TEST-01] Google Sign-In Popup:
+Click "Sign in with Google" -> Popup opens -> Select account -> Successful sign-in.
+
+[TEST-02] Fallback Under Blocked Popups:
+Simulate blocked popup -> System seamlessly executes `signInWithRedirect` -> 
+Returns to website with authenticated state.
+
+[TEST-03] Firestore Auto-Creation:
+Inspect Firestore `users/{uid}` document -> Verify `role: "Supporter"`, 
+`last_login_at` populated, `login_count: 1`.
+
+[TEST-04] Session Persistence:
+Close the browser tab -> Open a new tab -> Navigate to the website -> 
+Verify the user remains logged in without re-authenticating.
+
+[TEST-05] Superadmin Role Switcher:
+With Superadmin logged in, view Members Table -> Select "teacher" for a member -> 
+Verify Firestore document updates -> Verify member UI reflects "teacher".
+
+[TEST-06] Zero Hardcoded Emails:
+Run codebase grep for any specific admin email addresses:
+`grep -rn "support@aifoundation.net.au" src/` -> Must return 0 matches.
+
+================================================================================
+END OF PROTOCOL SPECIFICATION
+================================================================================

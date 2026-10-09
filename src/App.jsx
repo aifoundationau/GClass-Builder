@@ -43,6 +43,16 @@ import {
   Bot
 } from 'lucide-react';
 import RegistrationModal from './components/RegistrationModal';
+import { 
+  signInWithGoogle, 
+  logOutUser, 
+  subscribeToAuth, 
+  subscribeToUserProfile, 
+  getAllUsersFromFirebase, 
+  updateUserCategoryInFirebase, 
+  USER_CATEGORIES, 
+  checkRedirectAuthResult 
+} from './services/firebaseAuthService';
 
 const SAMPLE_PRESETS = {
   cloud: {
@@ -202,8 +212,8 @@ const SAMPLE_PRESETS = {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
-  const SUPERADMIN_EMAIL = "support@aifoundation.net.au";
-  const isSuperAdmin = currentUser?.email?.toLowerCase() === SUPERADMIN_EMAIL.toLowerCase();
+  // Dynamic Superadmin from Firebase (Zero Hardcoding)
+  const isSuperAdmin = Boolean(currentUser?.isSuperAdmin);
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -212,18 +222,36 @@ export default function App() {
   const [lmsMembers, setLmsMembers] = useState([]);
   const [loadingLmsMembers, setLoadingLmsMembers] = useState(false);
 
+  // Fetch all registered members from Firebase Database
   const fetchLmsMembers = async () => {
     setLoadingLmsMembers(true);
     try {
-      const res = await fetch('/api/users/lms');
-      const data = await res.json();
-      if (data && data.users) {
-        setLmsMembers(data.users);
+      const users = await getAllUsersFromFirebase();
+      if (users && users.length > 0) {
+        setLmsMembers(users);
       }
     } catch (err) {
       console.error("Failed to fetch LMS users:", err);
     } finally {
       setLoadingLmsMembers(false);
+    }
+  };
+
+  // Superadmin Feature: Change any user's category/classification in Firebase
+  const handleRoleChange = async (targetUid, newCategory) => {
+    if (!targetUid || !newCategory) return;
+    try {
+      await updateUserCategoryInFirebase(targetUid, newCategory);
+      setLmsMembers(prev => prev.map(m => {
+        if ((m.uid || m.id) === targetUid) {
+          return { ...m, role: newCategory, classification: newCategory };
+        }
+        return m;
+      }));
+      showToast(`User classification updated to "${newCategory}" in Firebase!`);
+    } catch (err) {
+      console.error("Failed to update role in Firebase:", err);
+      showToast(`Role update error: ${err.message}`);
     }
   };
 
@@ -474,10 +502,25 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Check URL parameters for OAuth status notifications
+    // 1. Check if returning from redirect Google login flow
+    checkRedirectAuthResult().then(profile => {
+      if (profile) {
+        setCurrentUser(profile);
+        showToast(`Signed in as ${profile.displayName || profile.email} (${profile.classification || "Supporter"})`);
+      }
+    });
+
+    // 2. Subscribe to Firebase real-time auth state
+    const unsubscribeAuth = subscribeToAuth((profile) => {
+      if (profile) {
+        setCurrentUser(profile);
+      }
+    });
+
+    // 3. Check URL parameters for OAuth status notifications
     const params = new URLSearchParams(window.location.search);
     if (params.get("auth_success")) {
-      showToast("Signed in with Google Classroom successfully!");
+      showToast("Signed in with Google successfully!");
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (params.get("login_error")) {
       const err = params.get("login_error");
@@ -486,25 +529,57 @@ export default function App() {
     }
 
     checkAuthAndFetchData();
-    const interval = setInterval(checkAuthAndFetchData, 10000);
-    return () => clearInterval(interval);
+    fetchLmsMembers();
+    const interval = setInterval(checkAuthAndFetchData, 15000);
+
+    return () => {
+      unsubscribeAuth();
+      clearInterval(interval);
+    };
   }, []);
 
-  // Real Google OAuth 2.0 Login
-  const handleLogin = () => {
+  // Real-time synchronization of user profile & role changes
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const unsub = subscribeToUserProfile(currentUser.uid, (updatedData) => {
+      if (updatedData) {
+        setCurrentUser(prev => ({ ...prev, ...updatedData }));
+      }
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  // Unbreakable Google Authentication Flow
+  const handleLogin = async () => {
     setIsLoggingIn(true);
-    window.location.href = '/api/auth/google_login';
+    try {
+      const userProfile = await signInWithGoogle();
+      if (userProfile) {
+        setCurrentUser(userProfile);
+        setShowLoginModal(false);
+        showToast(`Welcome ${userProfile.displayName || userProfile.email}! Classification: ${userProfile.classification || "Supporter"}`);
+      }
+    } catch (err) {
+      console.warn("[Firebase Google Auth error, attempting fallback]:", err);
+      if (err.code !== 'auth/popup-closed-by-user') {
+        window.location.href = '/api/auth/google_login';
+      }
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await logOutUser();
+      await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
     } catch (e) {
       console.log(e);
     }
     localStorage.removeItem("gcb_user_session");
+    localStorage.removeItem("gcb_active_user");
     setCurrentUser(null);
-    showToast("Signed out of Google Classroom session.");
+    showToast("Signed out of Google session.");
   };
 
   const handleLoadPreset = (key) => {
@@ -1821,19 +1896,18 @@ export default function App() {
                 </div>
                 <div className="top-user-info">
                   <div className="top-user-name" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span>{currentUser.name || "Instructor"}</span>
-                    {isSuperAdmin && (
-                      <span style={{
-                        background: 'rgba(99, 102, 241, 0.25)',
-                        color: '#a78bfa',
-                        padding: '1px 5px',
-                        borderRadius: '4px',
-                        fontSize: '0.62rem',
-                        fontWeight: 700
-                      }}>
-                        SUPERADMIN
-                      </span>
-                    )}
+                    <span>{currentUser.name || currentUser.displayName || "User"}</span>
+                    <span style={{
+                      background: isSuperAdmin ? 'rgba(99, 102, 241, 0.25)' : 'rgba(52, 168, 83, 0.15)',
+                      color: isSuperAdmin ? '#a78bfa' : '#4ade80',
+                      padding: '1px 6px',
+                      borderRadius: '4px',
+                      fontSize: '0.62rem',
+                      fontWeight: 700,
+                      textTransform: 'uppercase'
+                    }}>
+                      {isSuperAdmin ? "SUPERADMIN" : (currentUser.classification || currentUser.role || "Supporter")}
+                    </span>
                   </div>
                   <div className="top-user-email">
                     {currentUser.email}
@@ -3213,7 +3287,7 @@ export default function App() {
                   <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: '4px' }}>PCI-DSS Level 1 Secure</div>
                 </div>
 
-                {/* Internal cards: only visible to superadmin (support@aifoundation.net.au) */}
+                {/* Internal cards: only visible to superadmin */}
                 {isSuperAdmin && (
                   <>
                     <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
@@ -3311,16 +3385,43 @@ export default function App() {
                             {m.phone && <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>{m.phone}</div>}
                           </td>
                           <td style={{ padding: '12px 16px' }}>
-                            <span style={{
-                              padding: '2px 8px',
-                              borderRadius: '4px',
-                              fontSize: '0.72rem',
-                              fontWeight: 600,
-                              background: m.role === 'school_admin' ? 'rgba(239, 68, 68, 0.15)' : m.role === 'instructor' ? 'rgba(52, 168, 83, 0.15)' : 'rgba(66, 133, 244, 0.15)',
-                              color: m.role === 'school_admin' ? '#f87171' : m.role === 'instructor' ? '#34a853' : '#60a5fa'
-                            }}>
-                              {m.role || 'student'}
-                            </span>
+                            {isSuperAdmin ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <select
+                                  value={m.role || m.classification || "Supporter"}
+                                  onChange={(e) => handleRoleChange(m.uid || m.id, e.target.value)}
+                                  style={{
+                                    background: '#0f172a',
+                                    color: '#e2e8f0',
+                                    border: '1px solid rgba(99, 102, 241, 0.45)',
+                                    borderRadius: '6px',
+                                    padding: '5px 8px',
+                                    fontSize: '0.76rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    outline: 'none'
+                                  }}
+                                  title="Change member classification in Firebase"
+                                >
+                                  {USER_CATEGORIES.map(cat => (
+                                    <option key={cat} value={cat} style={{ background: '#0f172a', color: '#fff' }}>
+                                      {cat}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : (
+                              <span style={{
+                                padding: '3px 9px',
+                                borderRadius: '6px',
+                                fontSize: '0.72rem',
+                                fontWeight: 600,
+                                background: m.role === 'Superadmin' ? 'rgba(168, 85, 247, 0.2)' : m.role === 'Supporter' ? 'rgba(52, 168, 83, 0.15)' : 'rgba(66, 133, 244, 0.15)',
+                                color: m.role === 'Superadmin' ? '#c084fc' : m.role === 'Supporter' ? '#4ade80' : '#60a5fa'
+                              }}>
+                                {m.role || m.classification || 'Supporter'}
+                              </span>
+                            )}
                           </td>
                           <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#818cf8', fontSize: '0.78rem' }}>
                             {m.stripe_customer_id}

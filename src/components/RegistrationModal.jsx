@@ -33,7 +33,7 @@ export default function RegistrationModal({
   isSuperAdmin = false,
   initialView = 'form'
 }) {
-  const superAdmin = isSuperAdmin || (currentUser?.email?.toLowerCase() === 'support@aifoundation.net.au');
+  const superAdmin = Boolean(isSuperAdmin);
   const [activeView, setActiveView] = useState(initialView || 'form');
 
   useEffect(() => {
@@ -414,13 +414,13 @@ export default function RegistrationModal({
                   </div>
                 )}
 
-                {/* Internal fields: only visible to superadmin (support@aifoundation.net.au) */}
+                {/* Internal fields: only visible to superadmin */}
                 {superAdmin && (
                   <>
                     <div style={{ margin: '4px 0', borderTop: '1px solid rgba(255, 255, 255, 0.08)' }} />
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#a78bfa', fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                       <ShieldCheck size={13} />
-                      <span>Superadmin System Details (support@aifoundation.net.au)</span>
+                      <span>Superadmin System Details</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: '#94a3b8' }}>Invoice Prefix:</span>
