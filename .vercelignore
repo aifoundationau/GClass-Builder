@@ -1,0 +1,13 @@
+# Vercel Deployment Ignore
+# Ensures Vercel builds the Vite React application cleanly without Python serverless bundle limits.
+api/
+requirements.txt
+api_server.py
+classroom_course_engine.py
+stripe_lms_service.py
+ai_model_router.py
+test_model_router.py
+test_course_engine.py
+*.py
+*.xlsx
+.venv/

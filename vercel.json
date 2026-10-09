@@ -3,23 +3,7 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite",
-  "build": {
-    "env": {
-      "PYTHONUTF8": "1",
-      "PYTHONIOENCODING": "utf-8",
-      "LANG": "C.UTF-8",
-      "LC_ALL": "C.UTF-8"
-    }
-  },
-  "env": {
-    "PYTHONUTF8": "1",
-    "PYTHONIOENCODING": "utf-8"
-  },
   "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/index.py?path=$1"
-    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
