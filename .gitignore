@@ -17,9 +17,11 @@ __pycache__/
 .pytest_cache/
 
 # Sensitive & Secret Files (Google OAuth & Sessions)
-credentials.json
-token.json
-user_session.json
+credentials*.json
+!credentials.example.json
+token*.json
+user_session*.json
+* (1).*
 *.env
 *.env.local
 *.env.*.local

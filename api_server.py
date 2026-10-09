@@ -36,23 +36,69 @@ from classroom_course_engine import (
 try:
     from google_auth_oauthlib.flow import Flow
     from googleapiclient.discovery import build
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
 except ImportError:
     pass
 
 import stripe_lms_service
 
-USER_SESSION_FILE = "user_session.json"
+IS_VERCEL = bool(os.environ.get("VERCEL"))
+USER_SESSION_FILE = "/tmp/user_session.json" if IS_VERCEL else "user_session.json"
 GLOBAL_SERVICE = None
 OAUTH_FLOW_CACHE = {}
 
 
 def get_current_user_session() -> dict:
-    if os.path.exists(USER_SESSION_FILE):
+    session_file = "/tmp/user_session.json" if IS_VERCEL else USER_SESSION_FILE
+    if os.path.exists(session_file):
         try:
-            with open(USER_SESSION_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            with open(session_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data and data.get("authenticated"):
+                    return data
         except Exception:
             pass
+
+    # If user_session.json missing, attempt auto-restore from existing token.json candidates
+    token_candidates = [
+        "/tmp/token.json",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "token.json"),
+        "token.json"
+    ]
+    for token_path in token_candidates:
+        if os.path.exists(token_path):
+            try:
+                creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+                if creds:
+                    if not creds.valid and creds.refresh_token:
+                        creds.refresh(Request())
+                        try:
+                            with open(token_path, "w", encoding="utf-8") as token_out:
+                                token_out.write(creds.to_json())
+                        except Exception:
+                            pass
+
+                    if creds.valid:
+                        oauth2_service = build('oauth2', 'v2', credentials=creds)
+                        user_info = oauth2_service.userinfo().get().execute()
+                        email = user_info.get("email", "")
+                        name = user_info.get("name", "")
+                        user_session = {
+                            "authenticated": True,
+                            "email": email,
+                            "name": name,
+                            "role": "Google Classroom Instructor / Teacher",
+                            "avatar": user_info.get("picture", f"https://api.dicebear.com/7.x/initials/svg?seed={email}&backgroundColor=4285f4"),
+                            "domain": email.split("@")[1] if "@" in email else "",
+                            "login_time": datetime.now(timezone.utc).isoformat()
+                        }
+                        save_user_session(user_session)
+                        print(f"[AUTH] Auto-restored active session from {token_path} for {email}")
+                        return user_session
+            except Exception as e:
+                print(f"[AUTH WARN] Auto-restore session from {token_path} failed: {e}")
+
     return {
         "authenticated": False,
         "email": None,
@@ -62,8 +108,12 @@ def get_current_user_session() -> dict:
 
 
 def save_user_session(user_data: dict):
-    with open(USER_SESSION_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_data, f, indent=2)
+    target_file = "/tmp/user_session.json" if IS_VERCEL else USER_SESSION_FILE
+    try:
+        with open(target_file, "w", encoding="utf-8") as f:
+            json.dump(user_data, f, indent=2)
+    except Exception as e:
+        print(f"[AUTH WARN] Could not write session to {target_file}: {e}")
 
 
 def get_global_service():
@@ -105,12 +155,25 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(content_length).decode("utf-8")
         return json.loads(raw)
 
+    def _resolve_request_path(self) -> str:
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        if path.startswith("/api/index") or path == "/api":
+            matched_header = self.headers.get("x-matched-path")
+            if matched_header and not matched_header.startswith("/api/index"):
+                return matched_header
+            query = urllib.parse.parse_qs(parsed.query)
+            sub_path = query.get("path", [""])[0]
+            if sub_path:
+                return f"/api/{sub_path.lstrip('/')}"
+        return path
+
     def do_GET(self):
         global OAUTH_FLOW_CACHE
         global GLOBAL_SERVICE
         
+        path = self._resolve_request_path()
         parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
 
         if path in ("/", "", "/index.html"):
             dist_index = os.path.join(os.path.dirname(__file__), "dist", "index.html")
@@ -184,7 +247,11 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/auth/google_login":
             try:
                 if not os.path.exists(CREDENTIALS_FILE):
-                    self._send_json(400, {"error": f"Missing {CREDENTIALS_FILE}"})
+                    print(f"[AUTH ERROR] Missing credentials file: {CREDENTIALS_FILE}")
+                    self.send_response(302)
+                    self._send_cors_headers()
+                    self.send_header("Location", f"/?login_error={urllib.parse.quote('credentials.json file not found')}")
+                    self.end_headers()
                     return
                 
                 flow = Flow.from_client_secrets_file(
@@ -204,13 +271,37 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 self.send_header("Location", auth_url)
                 self.end_headers()
             except Exception as e:
-                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+                print(f"[AUTH ERROR] google_login initialization failed: {e}")
+                self.send_response(302)
+                self._send_cors_headers()
+                self.send_header("Location", f"/?login_error={urllib.parse.quote(str(e))}")
+                self.end_headers()
 
         elif path == "/api/auth/oauth2callback":
             query = urllib.parse.parse_qs(parsed.query)
             code = query.get("code", [""])[0]
+            error_param = query.get("error", [""])[0]
+
+            if error_param:
+                print(f"[AUTH] OAuth cancelled or denied by user: {error_param}")
+                self.send_response(302)
+                self._send_cors_headers()
+                self.send_header("Location", f"/?login_error={urllib.parse.quote('Sign-in cancelled or permission denied.')}")
+                self.end_headers()
+                return
+
             if not code:
-                self._send_json(400, {"error": "Missing authorization code"})
+                # If code is missing, check if user already has an active token
+                if os.path.exists(TOKEN_FILE):
+                    self.send_response(302)
+                    self._send_cors_headers()
+                    self.send_header("Location", "/")
+                    self.end_headers()
+                    return
+                self.send_response(302)
+                self._send_cors_headers()
+                self.send_header("Location", f"/?login_error={urllib.parse.quote('No authorization code received.')}")
+                self.end_headers()
                 return
             
             try:
@@ -255,7 +346,40 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 self.send_header("Location", "/")
                 self.end_headers()
             except Exception as e:
-                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+                print(f"[AUTH WARN] OAuth exchange error: {e}")
+                # Resilient fallback: If code was already redeemed / expired, but token.json exists and is valid,
+                # seamlessly restore the active session and redirect cleanly to /
+                if os.path.exists(TOKEN_FILE):
+                    try:
+                        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+                        if creds and creds.valid:
+                            oauth2_service = build('oauth2', 'v2', credentials=creds)
+                            user_info = oauth2_service.userinfo().get().execute()
+                            email = user_info.get("email", "")
+                            user_session = {
+                                "authenticated": True,
+                                "email": email,
+                                "name": user_info.get("name", ""),
+                                "role": "Google Classroom Instructor / Teacher",
+                                "avatar": user_info.get("picture", f"https://api.dicebear.com/7.x/initials/svg?seed={email}&backgroundColor=4285f4"),
+                                "domain": email.split("@")[1] if "@" in email else "",
+                                "login_time": datetime.now(timezone.utc).isoformat()
+                            }
+                            save_user_session(user_session)
+                            print(f"[AUTH] Seamlessly recovered session for {email}")
+                            self.send_response(302)
+                            self._send_cors_headers()
+                            self.send_header("Location", "/")
+                            self.end_headers()
+                            return
+                    except Exception as sub_e:
+                        print(f"[AUTH WARN] Fallback token restore failed: {sub_e}")
+
+                # Redirect to home with a clear toast notification instead of browser 500 error screen
+                self.send_response(302)
+                self._send_cors_headers()
+                self.send_header("Location", f"/?login_error={urllib.parse.quote('Authorization expired or code was already used. Please click login again.')}")
+                self.end_headers()
 
         elif path == "/api/courses":
             try:
@@ -312,8 +436,8 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": f"Path not found: {path}"})
 
     def do_POST(self):
+        path = self._resolve_request_path()
         parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
 
         # 1. Login with Google Classroom Email
         if path == "/api/auth/login":
