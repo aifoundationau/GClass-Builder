@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node dev-runner.mjs",
     "start": "node dev-runner.mjs",
-    "build": "vite build",
+    "build": "vite build --logLevel warn",
     "preview": "vite preview"
   },
   "dependencies": {
