@@ -205,8 +205,6 @@ export default function App() {
   const SUPERADMIN_EMAIL = "support@aifoundation.net.au";
   const isSuperAdmin = currentUser?.email?.toLowerCase() === SUPERADMIN_EMAIL.toLowerCase();
 
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginName, setLoginName] = useState("");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showRegistrationModal, setShowRegistrationModal] = useState(false);
@@ -417,24 +415,21 @@ export default function App() {
 
   // Check auth and fetch initial courses
   const checkAuthAndFetchData = async () => {
-    const cachedSession = localStorage.getItem("gcb_user_session");
-    if (cachedSession) {
-      try {
-        const parsed = JSON.parse(cachedSession);
-        if (parsed && parsed.authenticated) {
-          setCurrentUser(prev => prev || parsed);
-        }
-      } catch (e) {}
-    }
-
     try {
-      // 1. Check Auth
+      // 1. Check Auth from backend API
       const authRes = await fetch('/api/auth/me');
       if (authRes.ok) {
         const user = await authRes.json();
         if (user && user.authenticated) {
           setCurrentUser(user);
+          localStorage.setItem("gcb_user_session", JSON.stringify(user));
+        } else {
+          setCurrentUser(null);
+          localStorage.removeItem("gcb_user_session");
         }
+      } else {
+        setCurrentUser(null);
+        localStorage.removeItem("gcb_user_session");
       }
 
       // 2. Fetch Status
@@ -474,80 +469,31 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.log("Local offline simulation active:", err);
+      console.log("Status sync check:", err);
     }
   };
 
   useEffect(() => {
+    // Check URL parameters for OAuth status notifications
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("auth_success")) {
+      showToast("Signed in with Google Classroom successfully!");
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (params.get("login_error")) {
+      const err = params.get("login_error");
+      showToast(`Google Sign-in: ${err}`);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
     checkAuthAndFetchData();
     const interval = setInterval(checkAuthAndFetchData, 10000);
     return () => clearInterval(interval);
   }, []);
 
-  // Handle Login with Google Classroom Email
+  // Real Google OAuth 2.0 Login
   const handleLogin = () => {
     setIsLoggingIn(true);
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      window.location.href = '/api/auth/google_login';
-    } else {
-      // Hosted Vercel cloud preview fallback
-      const googleUser = {
-        authenticated: true,
-        email: "support@aifoundation.net.au",
-        name: "AI Foundation Instructor",
-        role: "Google Classroom Instructor / Teacher",
-        avatar: "https://lh3.googleusercontent.com/a-/ALV-UjXJAClMqJZU33zEmd_yCEUW2SnL4OML8aZMbwULCVhYnAH2tmJbtsHcQYBEk27WKunjQ04Ey3-pNG0lN2qjwQ-nAjYyDOcWxnvCQcajSoKrS2cGklllxTT4umsDtBZSPZhklfvM4_bVVn-BFyv_hCtzP5lrAr1fRlQARJ7iOsmG2dksiklpXvLeupLYWU32ccFiUIfUWVHErRLPFpiSt_gToYQUkwyIcqWNfo_XL22xXp32YskFajhvM0zq8BUe-UjxruKANKolzfLMC2u4NzvqpcaLAQzee55PMCigt9oQyOr5AsGNtlu6HpSpmTeXgx63TmyCfez752bNcuz3E3wVsPlbFjSOe3oSGlRoPpquQpuIW4GbhJTi40GVYipv-NLkn2x3S-jMX-Sbb3OWhGPNZIK2_uGpGR_1fxZxxU5LAbRjMBr7yl8NkYRyDc6QygQ-WMpWFzhrTPebzijZQcDfviKVOncCs22IoidDKw86N7dWK7NWYLzRaIu-73gKL-n-xIc-zZ57rYAGTOmMrNJV5gTVAdgivJ493UCkrocTThDtfL7WZZVomwH8YuBTVj6uKsyNt39o1KXoiwQyFv5wcM9_0iHvHUlUqyd4iXl5b2cwqF_XiIlNByFi4gGSh5dPouM-nuIQCxtOGGfp5lSIhrVBFMoWWdOeQ_ZcQ6NyJqefaMy4NTychJxQWE4ZvzDoRqncWrRAHQm61DaCXCsHUzXgG9adBD1R3npiMIy0ZfHbWcNqZFZOnxwOrKQtr-B_kYysz7TyOuAHBsMjnhFamRnXGF9Rn0XkaFZCvlgUlOkqz5YnLWa9Nn4C8pm5wwllXKgGKkWmbNzBRaeN9IlegOFEXud6k2NCy48yU5flar06UdfSo6CpGNZVeWOZQL7ILrj08M_yvybC4y2139jLtmKP0T2jGk5T2nBmx7MmR-0wUXjY9ze5TwgaiW0aod4SE5tLHHT2HMw6YJQn-e8aaBZamAJL6hLo-LyMRuElK5YFIdpliPIcFPiEqCgfVXrp0sUpV5iqNLfQA_4bQQJZGIgl3OGTgRmP3W8_aFF6NxW_FhHlY6M=s96-c",
-        domain: "aifoundation.net.au",
-        login_time: new Date().toISOString()
-      };
-      setCurrentUser(googleUser);
-      localStorage.setItem("gcb_user_session", JSON.stringify(googleUser));
-      setShowLoginModal(false);
-      setIsLoggingIn(false);
-      showToast("Signed in as AI Foundation Instructor (Studio Mode)");
-    }
-  };
-
-  const handleEmailLogin = async (e) => {
-    if (e) e.preventDefault();
-    const emailToUse = loginEmail.trim() || "support@aifoundation.net.au";
-    const nameToUse = loginName.trim() || "Support AI Foundation";
-    try {
-      setIsLoggingIn(true);
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: emailToUse, name: nameToUse })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.success && data.user) {
-          setCurrentUser(data.user);
-          localStorage.setItem("gcb_user_session", JSON.stringify(data.user));
-          setShowLoginModal(false);
-          showToast(`Signed in as ${data.user.name}`);
-          return;
-        }
-      }
-      throw new Error("API login unavailable");
-    } catch (err) {
-      console.log("Local offline simulation active for login:", err);
-      const simulatedUser = {
-        authenticated: true,
-        email: emailToUse,
-        name: nameToUse,
-        role: "Google Classroom Instructor / Teacher",
-        avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${emailToUse}&backgroundColor=4285f4`,
-        domain: emailToUse.split("@")[1] || "aifoundation.net.au",
-        login_time: new Date().toISOString()
-      };
-      setCurrentUser(simulatedUser);
-      localStorage.setItem("gcb_user_session", JSON.stringify(simulatedUser));
-      setShowLoginModal(false);
-      showToast(`Signed in as ${simulatedUser.name} (Studio Mode)`);
-    } finally {
-      setIsLoggingIn(false);
-    }
+    window.location.href = '/api/auth/google_login';
   };
 
   const handleLogout = async () => {
@@ -1333,35 +1279,10 @@ export default function App() {
                 <span>{isLoggingIn ? "Redirecting to Google..." : "Sign in with Google Classroom"}</span>
               </button>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0' }}>
-                <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
-                <span style={{ fontSize: '0.72rem', color: '#94a3b8', textTransform: 'uppercase' }}>or sign in directly</span>
-                <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
-              </div>
-
-              <form onSubmit={handleEmailLogin} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                <input
-                  type="email"
-                  className="form-control"
-                  placeholder="support@aifoundation.net.au"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  style={{ fontSize: '0.84rem' }}
-                />
-                <button
-                  type="submit"
-                  className="btn-primary"
-                  style={{ width: '100%', justifyContent: 'center', padding: '9px', fontSize: '0.84rem', background: '#34a853' }}
-                >
-                  <User size={15} />
-                  <span>Instant Sign In (Simulator Mode)</span>
-                </button>
-              </form>
-
-              <div style={{ marginTop: '8px', background: 'rgba(52, 168, 83, 0.08)', border: '1px solid rgba(52, 168, 83, 0.25)', borderRadius: '10px', padding: '10px 12px', display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <ShieldCheck size={16} color="#34a853" style={{ flexShrink: 0 }} />
-                <div style={{ fontSize: '0.74rem', color: '#cbd5e1' }}>
-                  Strict NO-DELETE Policy enforced across all Classroom sessions.
+              <div style={{ marginTop: '8px', background: 'rgba(66, 133, 244, 0.08)', border: '1px solid rgba(66, 133, 244, 0.25)', borderRadius: '10px', padding: '12px 14px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <ShieldCheck size={18} color="#4285f4" style={{ flexShrink: 0 }} />
+                <div style={{ fontSize: '0.78rem', color: '#cbd5e1', lineHeight: 1.4 }}>
+                  Authenticates directly through Google OAuth 2.0. Strict NO-DELETE Policy enforced across all Classroom sessions.
                 </div>
               </div>
             </div>
@@ -3501,71 +3422,11 @@ export default function App() {
                 <span>Sign in with Google Classroom</span>
               </button>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
-                <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>TEST IDENTITY SWITCH</span>
-                <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
-              </div>
-
-              {/* Fast switch buttons for superadmin vs student */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginEmail("support@aifoundation.net.au");
-                    setLoginName("Support AI Foundation");
-                    handleEmailLogin();
-                  }}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    background: 'rgba(99, 102, 241, 0.15)',
-                    border: '1px solid rgba(99, 102, 241, 0.35)',
-                    color: '#c7d2fe',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    fontSize: '0.82rem'
-                  }}
-                >
-                  <div style={{ textAlign: 'left' }}>
-                    <div style={{ fontWeight: 600, color: '#f8fafc' }}>Sign in as Superadmin</div>
-                    <div style={{ fontSize: '0.72rem', color: '#a5b4fc' }}>support@aifoundation.net.au</div>
-                  </div>
-                  <span style={{ background: '#6366f1', color: '#fff', fontSize: '0.68rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                    SUPERADMIN
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginEmail("student@test.com");
-                    setLoginName("Student User");
-                    handleEmailLogin();
-                  }}
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    background: 'rgba(255, 255, 255, 0.03)',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    color: '#cbd5e1',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    fontSize: '0.82rem'
-                  }}
-                >
-                  <div style={{ textAlign: 'left' }}>
-                    <div style={{ fontWeight: 600, color: '#f8fafc' }}>Sign in as Standard Customer</div>
-                    <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>student@test.com</div>
-                  </div>
-                  <span style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#94a3b8', fontSize: '0.68rem', padding: '2px 6px', borderRadius: '4px' }}>
-                    CUSTOMER
-                  </span>
-                </button>
+              <div style={{ marginTop: '6px', background: 'rgba(66, 133, 244, 0.08)', border: '1px solid rgba(66, 133, 244, 0.25)', borderRadius: '10px', padding: '12px 14px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <ShieldCheck size={18} color="#4285f4" style={{ flexShrink: 0 }} />
+                <div style={{ fontSize: '0.78rem', color: '#cbd5e1', lineHeight: 1.4 }}>
+                  Authenticates with your Google Classroom account to create, sync, and publish curriculum.
+                </div>
               </div>
             </div>
           </div>

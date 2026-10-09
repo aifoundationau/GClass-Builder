@@ -259,7 +259,7 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                     scopes=SCOPES,
                     redirect_uri="http://localhost:5173/api/auth/oauth2callback"
                 )
-                auth_url, state = flow.authorization_url(prompt='consent', access_type='offline')
+                auth_url, state = flow.authorization_url(prompt='select_account consent', access_type='offline')
                 
                 OAUTH_FLOW_CACHE = {
                     "state": state,
@@ -291,13 +291,6 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 return
 
             if not code:
-                # If code is missing, check if user already has an active token
-                if os.path.exists(TOKEN_FILE):
-                    self.send_response(302)
-                    self._send_cors_headers()
-                    self.send_header("Location", "/")
-                    self.end_headers()
-                    return
                 self.send_response(302)
                 self._send_cors_headers()
                 self.send_header("Location", f"/?login_error={urllib.parse.quote('No authorization code received.')}")
@@ -343,7 +336,7 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 
                 self.send_response(302)
                 self._send_cors_headers()
-                self.send_header("Location", "/")
+                self.send_header("Location", "/?auth_success=1")
                 self.end_headers()
             except Exception as e:
                 print(f"[AUTH WARN] OAuth exchange error: {e}")
@@ -473,9 +466,14 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         # 2. Logout
         elif path == "/api/auth/logout":
             try:
-                if os.path.exists(USER_SESSION_FILE):
-                    os.remove(USER_SESSION_FILE)
-                print("[AUTH] User signed out.")
+                for f_path in [USER_SESSION_FILE, TOKEN_FILE, "/tmp/user_session.json", "/tmp/token.json", "user_session.json", "token.json"]:
+                    if os.path.exists(f_path):
+                        try:
+                            os.remove(f_path)
+                        except Exception:
+                            pass
+                GLOBAL_SERVICE = None
+                print("[AUTH] User signed out and credentials cleared.")
                 self._send_json(200, {"success": True, "authenticated": False})
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
