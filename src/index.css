@@ -232,29 +232,33 @@ input, textarea, select {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 28px;
-  padding-top: 10px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--border-color);
+  padding: 16px 24px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-color);
   position: sticky;
-  top: 0;
+  top: 12px;
   background: var(--bg-card);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-sm);
   z-index: 40;
 }
 
 .page-title {
-  font-size: 1.75rem;
+  font-size: 1.35rem;
   font-weight: 800;
   background: linear-gradient(to right, var(--primary), var(--purple));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  line-height: 1.25;
 }
 
 .page-desc {
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   color: var(--text-muted);
-  margin-top: 4px;
+  margin-top: 5px;
+  line-height: 1.5;
+  max-width: 650px;
 }
 
 .top-actions {

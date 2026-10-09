@@ -1,0 +1,105 @@
+[
+  {
+    "uid": "lms_test_01",
+    "email": "david@aifoundation.net.au",
+    "name": "David",
+    "business_name": "AI Foundation Australia",
+    "stripe_customer_id": "cus_VPMAr2NzIXgCQ3",
+    "tags": [
+      "lms"
+    ],
+    "role": "school_admin",
+    "source": "lms",
+    "updated_at": "2026-10-09T06:38:27.758787+00:00"
+  },
+  {
+    "uid": "lms_usr_VPNAgUaK6n4AEW",
+    "email": "john@test.com",
+    "name": "John Test",
+    "business_name": "",
+    "account_type": "individual",
+    "role": "student",
+    "phone": "12345",
+    "address": {
+      "line1": "1 Main St",
+      "city": "Sydney",
+      "postal_code": "2000",
+      "country": "AU"
+    },
+    "tax_id": "",
+    "stripe_customer_id": "cus_VPNAgUaK6n4AEW",
+    "invoice_policy": {
+      "default_status": "draft",
+      "payment_terms_days": 30,
+      "prefix": "LMS"
+    },
+    "tags": [
+      "lms"
+    ],
+    "source": "lms",
+    "updated_at": "2026-10-09T07:40:17.125147+00:00"
+  },
+  {
+    "uid": "lms_usr_VPNFlVwPcpElKB",
+    "email": "Samplegirl@gmail.com",
+    "name": "Vera Wang",
+    "business_name": "",
+    "account_type": "individual",
+    "role": "student",
+    "phone": "+61433997895",
+    "address": {
+      "line1": "13 Smith Street",
+      "line2": "",
+      "city": "Southport",
+      "state": "QLD",
+      "postal_code": "4215",
+      "country": "AU"
+    },
+    "tax_id": "",
+    "stripe_customer_id": "cus_VPNFlVwPcpElKB",
+    "invoice_policy": {
+      "default_status": "draft",
+      "payment_terms_days": 30,
+      "prefix": "LMS"
+    },
+    "tags": [
+      "lms"
+    ],
+    "source": "lms",
+    "updated_at": "2026-10-09T07:45:37.144317+00:00"
+  },
+  {
+    "uid": "lms_usr_VPNaghETJcksD9",
+    "email": "ada.lovelace@computing.org",
+    "name": "Ada Lovelace",
+    "business_name": "",
+    "account_type": "individual",
+    "role": "student",
+    "date_of_birth": "1815-12-10",
+    "education_history": {
+      "level": "Master of Science",
+      "institution": "University of London",
+      "field_of_study": "Mathematics & Analytical Engines",
+      "notes": "First Computer Programmer"
+    },
+    "phone": "",
+    "address": {
+      "line1": "12 St James Square",
+      "city": "London",
+      "postal_code": "SW1Y 4LB",
+      "country": "GB"
+    },
+    "tax_id": "",
+    "stripe_customer_id": "cus_VPNaghETJcksD9",
+    "invoice_policy": {
+      "default_status": "draft",
+      "payment_terms_days": 30,
+      "prefix": "LMS"
+    },
+    "tags": [
+      "lms"
+    ],
+    "source": "lms",
+    "updated_at": "2026-10-09T08:06:16.558022+00:00"
+  }
+]

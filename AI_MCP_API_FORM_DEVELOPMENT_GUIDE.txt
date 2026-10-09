@@ -1,0 +1,708 @@
+================================================================================
+UNIVERSAL AGNOSTIC AGENTIC DATA INGESTION & MCP SPECIFICATION (UADIS)
+A Domain-Neutral, Platform-Agnostic Standard for Autonomous AI Agents, 
+Model Context Protocol (MCP), and Universal Data Entry
+================================================================================
+Specification Version : 2.0.0
+Author                : AI Architecture & Systems Engineering
+Target Audience       : Software Engineers, AI System Architects, Prompt Engineers
+File Format           : Plain Text (.txt)
+Compatibility         : Any LLM (Gemini, Claude, GPT, Llama), Any MCP Host, 
+                        Any Backend (Python, Node.js, Go, Rust), Any UI Framework
+================================================================================
+
+
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+1. CORE PHILOSOPHY & OBJECTIVES
+2. THE UNIVERSAL AGENTIC PARADIGM
+   2.1. The Single Data Contract Axiom
+   2.2. The Agnostic Agent Persona & Behavioral Boundaries
+   2.3. Modal-Independence (Voice, Text, Chat, Visual UI, Headless API)
+3. AGNOSTIC CONVERSATIONAL QUESTION GENERATION FORMULA
+   3.1. Field-to-Dialogue Mapping Grammar
+   3.2. Sequential, Conditional, and Multi-Turn Slot Filling
+   3.3. Self-Correction, Clarification, and Disambiguation Protocols
+4. UNIVERSAL MODEL CONTEXT PROTOCOL (MCP) TOOL SPECIFICATION
+   4.1. Standard MCP Tool Declaration Schema
+   4.2. Tool Invocation & Argument Parsing Protocol
+   4.3. Standard Tool Response Structure
+5. DATA DESTINATION & PRIVACY SEGREGATION MATRIX
+   5.1. The 4 Security Data Classification Tiers
+   5.2. Boundary Partitioning (External Processors vs Internal Store)
+   5.3. Public Identity vs Internal Telemetry
+6. POLYGLOT REFERENCE IMPLEMENTATIONS
+   6.1. Agnostic JSON Schema & Questionnaire Specification (Language-Neutral)
+   6.2. Python Reference Runtime (Agnostic Service & Ingestion Handler)
+   6.3. TypeScript / Node.js Reference Runtime
+   6.4. Dual-Mode UI Architecture (Web Form + Agent JSON Auto-Fill Console)
+7. MULTI-DOMAIN BLUEPRINT CATALOG
+   7.1. Domain A: Customer Identity & Billing (FinTech / SaaS)
+   7.2. Domain B: Student Admissions & Academic Profile (EdTech / LMS)
+   7.3. Domain C: Patient Intake & Medical History (Healthcare / Clinic)
+   7.4. Domain D: Vendor Onboarding & Procurement (Enterprise B2B)
+8. AGNOSTIC AGENTIC COMPLIANCE CHECKLIST
+================================================================================
+
+
+1. CORE PHILOSOPHY & OBJECTIVES
+--------------------------------------------------------------------------------
+Traditional web forms are tightly coupled to visual renderers (HTML DOM, CSS, 
+button events). When an autonomous AI Agent or an external MCP tool is 
+introduced, integration fails because visual forms assume:
+  - Human visual scanning of screen real estate.
+  - Interactive mouse clicks or touch taps.
+  - Ad-hoc validation hidden inside browser JavaScript.
+
+The Universal Agnostic Agentic Data Ingestion Specification (UADIS) reverses
+this relationship:
+  1. The DATA CONTRACT is the primary source of truth.
+  2. The CONVERSATIONAL PROTOCOL is derived directly from the contract.
+  3. The MCP TOOL DEFINITION is derived directly from the contract.
+  4. The VISUAL WEB FORM is merely one of multiple possible renderers.
+
+Under this standard, an AI agent can:
+  - Interview a human naturally across ANY medium (voice call, SMS, WhatsApp,
+    command line, web chat, or IDE sidecar).
+  - Understand the exact schema, constraints, data types, and required fields.
+  - Automatically validate, normalize, and format the user's responses.
+  - Invoke the canonical ingestion system via standard MCP tool calls or REST API.
+
+
+2. THE UNIVERSAL AGENTIC PARADIGM
+--------------------------------------------------------------------------------
+
+2.1. The Single Data Contract Axiom
+Every data-entry workflow MUST be governed by a single schema document containing:
+  - Metadata: Domain, entity name, version, description.
+  - Properties: Field names, types, regex formats, constraints, default values.
+  - Agentic Questions: Deterministic, polite inquiry strings for each field.
+  - Security Classifications: Destination routing rules (Vault, DB, External).
+  - MCP Tool Definition: Exportable standard tool specification.
+
+2.2. The Agnostic Agent Persona & Behavioral Boundaries
+The AI Agent operating on this schema must follow these universal behaviors:
+  - AGNOSTIC VOCABULARY: The agent never uses UI-specific phrases like "click 
+    here", "press the submit button", "open the modal", or "type in the input".
+  - NATURAL CONVERSATION: The agent asks questions conversationally, acknowledging 
+    user answers before moving to subsequent questions.
+  - INTENT PARSING: When a user provides multiple answers at once (e.g., "I'm 
+    Sarah Connor born on July 22 1985 in Melbourne"), the agent populates all 
+    applicable slots without asking redundant questions.
+  - GRACEFUL CONFIRMATION: The agent summarizes the assembled payload in plain 
+    language before executing the submission tool.
+
+2.3. Modal-Independence
+The specification works identically across:
+  - Autonomous Voice AI (Phone, WebRTC, Gemini Live, Speech-to-Text).
+  - Text Chatbots & Messaging (Slack, Teams, WhatsApp, Discord, Web Chat).
+  - IDE AI Agents & MCP Hosts (Antigravity IDE, Claude Desktop, Cursor).
+  - Headless Machine-to-Machine Pipelines (ETL, Webhooks, Batch Jobs).
+  - Graphical Web Applications (React, Vue, Svelte, Vanilla HTML/JS).
+
+
+3. AGNOSTIC CONVERSATIONAL QUESTION GENERATION FORMULA
+--------------------------------------------------------------------------------
+
+3.1. Field-to-Dialogue Mapping Grammar
+For every field in the data dictionary, formulate dialogue parameters using 
+this exact structure:
+
+  {
+    "field": "<canonical_snake_case_key>",
+    "data_type": "<string | number | boolean | object | array>",
+    "format": "<optional_format_standard: YYYY-MM-DD | email | phone_e164 | iso3166_country>",
+    "required": <true | false>,
+    "agent_prompt": "<Polite, direct question to ask the user>",
+    "explanation": "<Brief explanation of why this information is required>",
+    "normalization_rule": "<Guidance for the LLM on how to parse messy answers>",
+    "clarification_prompt": "<Prompt to use if the user's reply is invalid or ambiguous>"
+  }
+
+3.2. Sequential, Conditional, and Multi-Turn Slot Filling
+  - Sequential: Steps are numbered sequentially (1, 2, 3...).
+  - Conditional: A field specifies `"condition": {"field": "type", "value": "organization"}`.
+    If the condition is not met, the AI agent skips the question automatically.
+  - Compound (Objects): When a field is an object (e.g. `address`), provide 
+    both a compound prompt ("What is your full address including street, city, 
+    and postal code?") and atomic field mappings (`line1`, `city`, `postal_code`).
+
+3.3. Self-Correction and Disambiguation Protocols
+If a user gives an unparseable response:
+  1. The agent never outputs a generic "Error 400" or raw code traceback.
+  2. The agent explains what was misunderstood in friendly plain language.
+  3. The agent repeats the question with a concrete example.
+  Example:
+    User : "I was born twenty-five years ago."
+    Agent: "Could you please specify your exact date of birth (for example, 
+            March 15, 1999) so we can record your official date accurately?"
+
+
+4. UNIVERSAL MODEL CONTEXT PROTOCOL (MCP) TOOL SPECIFICATION
+--------------------------------------------------------------------------------
+
+4.1. Standard MCP Tool Declaration Schema
+An MCP tool encapsulates the ingestion process. It must follow the 2024/2025 
+Model Context Protocol specification:
+
+```json
+{
+  "name": "submit_<entity_name>",
+  "description": "Registers or ingests a new <entity_name> with validated fields and generates canonical record identifiers.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "<field_1>": {
+        "type": "<string | number | boolean | object | array>",
+        "description": "<Clear explanation of field meaning and format requirements>"
+      }
+    },
+    "required": ["<mandatory_field_1>", "<mandatory_field_2>"]
+  }
+}
+```
+
+4.2. Tool Invocation & Argument Parsing Protocol
+When an AI agent decides to execute data entry, it issues a standard tool call:
+```json
+{
+  "name": "submit_<entity_name>",
+  "arguments": {
+    "<field_1>": "<value_1>",
+    "<field_2>": "<value_2>"
+  }
+}
+```
+
+4.3. Standard Tool Response Structure
+The backend responds with a uniform MCP-compliant output structure:
+```json
+{
+  "success": true,
+  "client_id": "id_<generated_canonical_id>",
+  "message": "Successfully recorded <entity_name>.",
+  "data": {
+    "id": "id_<generated_canonical_id>",
+    "status": "active",
+    "timestamp": "2026-10-09T18:00:00Z"
+  },
+  "error": null
+}
+```
+
+
+5. DATA DESTINATION & PRIVACY SEGREGATION MATRIX
+--------------------------------------------------------------------------------
+
+5.1. The 4 Security Data Classification Tiers
+Every field collected in a form MUST be assigned to one of four destination tiers:
+
+  TIER 1 [PUBLIC / CLIENT DISPLAY]:
+    Data visible to the end-user on receipts, confirmation screens, and invoices.
+    Example: Customer Name, Client ID, Enrolled Course Name, Organization Name.
+
+  TIER 2 [INTERNAL DATABASE ONLY]:
+    Sensitive domain records stored strictly in internal databases (Firebase, 
+    PostgreSQL, Mongo, etc.) and NEVER sent to external processors.
+    Example: Date of Birth, Education History, Academic Transcript, Medical Notes.
+
+  TIER 3 [EXTERNAL PROCESSOR ONLY]:
+    Payment tokens, gateway cards, or third-party webhooks.
+    Example: Stripe payment method tokens, credit card CVV, KYC identity documents.
+
+  TIER 4 [SYSTEM TELEMETRY / ADMIN ONLY]:
+    Internal system metadata, database tags, route IDs, payment terms.
+    Example: Database indexing tags ('lms', 'prod_v2'), invoice prefixes, admin notes.
+
+5.2. Boundary Partitioning (External Processors vs Internal Store)
+The backend handler must explicitly bifurcate the payload before making 
+external API calls:
+```
+                    [ INCOMING AGENT / FORM PAYLOAD ]
+                                   │
+                 ┌─────────────────┴─────────────────┐
+                 ▼                                   ▼
+      [ EXTERNAL PROCESSOR ]               [ INTERNAL SECURE DB ]
+       (e.g., Stripe, SendGrid)           (e.g., Firebase, SQL)
+      - Name, Email, Address              - Client ID (returned from external)
+      - Card / Payment Token              - Full Legal Identity
+      - External Metadata Tags            - Date of Birth (INTERNAL ONLY)
+                                          - Education / Domain History
+                                          - System Index Tag ('lms')
+```
+
+5.3. Public Identity vs Internal Telemetry
+- Always label third-party technical IDs as human-friendly labels:
+  * `stripe_customer_id` -> "Client ID"
+  * `firebase_uid`       -> "Account ID"
+- Never expose internal database indexing tags or invoice prefixes to non-admin users.
+
+
+6. POLYGLOT REFERENCE IMPLEMENTATIONS
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+6.1. Agnostic JSON Schema & Questionnaire Specification (schema_contract.json)
+--------------------------------------------------------------------------------
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UniversalOnboardingContract",
+  "protocol": "Model Context Protocol & Agnostic Agent Onboarding",
+  "version": "2.0.0",
+  "entity": "member_profile",
+  "description": "Standard agnostic contract for user onboarding with academic and billing fields.",
+  "agent_instructions": "Conduct a sequential interview with the user. Extract data for each step. Once verified, formulate the argument payload and invoke submit_member_profile.",
+  "conversational_flow": [
+    {
+      "step": 1,
+      "field": "account_type",
+      "agent_question": "Are you registering as an individual or on behalf of an organization?",
+      "data_type": "string",
+      "allowed_values": ["individual", "organization"],
+      "default": "individual",
+      "required": true
+    },
+    {
+      "step": 2,
+      "field": "name",
+      "agent_question": "What is your full legal name?",
+      "data_type": "string",
+      "required": true
+    },
+    {
+      "step": 3,
+      "field": "email",
+      "agent_question": "What is your email address for account access and official communications?",
+      "data_type": "string",
+      "format": "email",
+      "required": true
+    },
+    {
+      "step": 4,
+      "field": "phone",
+      "agent_question": "What is your preferred contact phone number?",
+      "data_type": "string",
+      "format": "phone",
+      "required": false
+    },
+    {
+      "step": 5,
+      "field": "date_of_birth",
+      "agent_question": "What is your date of birth? (Please provide in YYYY-MM-DD format for identity verification)",
+      "data_type": "string",
+      "format": "YYYY-MM-DD",
+      "security_tier": "INTERNAL_DATABASE_ONLY",
+      "required": false
+    },
+    {
+      "step": 6,
+      "field": "education_history",
+      "agent_question": "What is your highest education qualification, institution name, and field of study?",
+      "data_type": "object",
+      "security_tier": "INTERNAL_DATABASE_ONLY",
+      "properties": {
+        "level": {"type": "string"},
+        "institution": {"type": "string"},
+        "field_of_study": {"type": "string"},
+        "notes": {"type": "string"}
+      },
+      "required": false
+    },
+    {
+      "step": 7,
+      "field": "address",
+      "agent_question": "What is your primary residential or billing address (Street, City, State, Postcode, and Country)?",
+      "data_type": "object",
+      "required": true,
+      "properties": {
+        "line1": {"type": "string"},
+        "city": {"type": "string"},
+        "state": {"type": "string"},
+        "postal_code": {"type": "string"},
+        "country": {"type": "string", "default": "AU"}
+      }
+    }
+  ],
+  "mcp_tool": {
+    "name": "submit_member_profile",
+    "description": "Submits a verified member profile, stores internal identity data, registers billing account, and returns the canonical Client ID.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "account_type": {"type": "string", "enum": ["individual", "organization"]},
+        "name": {"type": "string", "description": "Full legal name"},
+        "email": {"type": "string", "format": "email", "description": "Primary email address"},
+        "phone": {"type": "string", "description": "Contact telephone number"},
+        "date_of_birth": {"type": "string", "description": "YYYY-MM-DD date of birth (internal identity only)"},
+        "education_history": {
+          "type": "object",
+          "description": "Educational background and qualifications (internal identity only)",
+          "properties": {
+            "level": {"type": "string"},
+            "institution": {"type": "string"},
+            "field_of_study": {"type": "string"},
+            "notes": {"type": "string"}
+          }
+        },
+        "address": {
+          "type": "object",
+          "required": ["line1", "city", "postal_code"],
+          "properties": {
+            "line1": {"type": "string"},
+            "city": {"type": "string"},
+            "state": {"type": "string"},
+            "postal_code": {"type": "string"},
+            "country": {"type": "string", "default": "AU"}
+          }
+        }
+      },
+      "required": ["name", "email", "address"]
+    }
+  }
+}
+```
+
+--------------------------------------------------------------------------------
+6.2. Python Reference Runtime (Universal Ingestion Service)
+--------------------------------------------------------------------------------
+```python
+import json
+from typing import Dict, Any, Tuple
+
+class UniversalDataIngestionService:
+    def __init__(self, contract_path: str = "schema_contract.json"):
+        with open(contract_path, "r", encoding="utf-8") as f:
+            self.contract = json.load(f)
+
+    def get_schema(self) -> Dict[str, Any]:
+        """Returns the full agnostic contract including questionnaire & tool schema."""
+        return self.contract
+
+    def get_mcp_tools(self) -> Dict[str, Any]:
+        """Returns MCP tool declaration for tool discovery endpoints."""
+        return {
+            "tools": [self.contract["mcp_tool"]]
+        }
+
+    def validate_payload(self, payload: Dict[str, Any]) -> Tuple[bool, str]:
+        """Validates that all required fields meet the contract."""
+        required = self.contract["mcp_tool"]["inputSchema"].get("required", [])
+        for field in required:
+            if not payload.get(field):
+                return False, f"Missing mandatory field: {field}"
+        return True, ""
+
+    def process_submission(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Bifurcates payload:
+        - Third-party processor receives only billing identity.
+        - Internal database receives full record (including DoB & Education).
+        """
+        valid, err_msg = self.validate_payload(payload)
+        if not valid:
+            return {"success": False, "error": err_msg}
+
+        # 1. External Third-Party Payload (Filtered)
+        external_payload = {
+            "name": payload.get("name"),
+            "email": payload.get("email"),
+            "phone": payload.get("phone"),
+            "address": payload.get("address", {})
+        }
+        # Simulating external gateway client ID generation:
+        generated_client_id = f"client_{abs(hash(payload.get('email')))}"
+
+        # 2. Internal Database Record (Complete)
+        internal_record = {
+            "client_id": generated_client_id,
+            "account_type": payload.get("account_type", "individual"),
+            "name": payload.get("name"),
+            "email": payload.get("email"),
+            "phone": payload.get("phone"),
+            "date_of_birth": payload.get("date_of_birth"),
+            "education_history": payload.get("education_history"),
+            "address": payload.get("address"),
+            "system_tag": "ingestion_v2",
+            "created_at": "2026-10-09T18:00:00Z"
+        }
+        # save_record_to_db(internal_record)
+
+        return {
+            "success": True,
+            "client_id": generated_client_id,
+            "message": f"Successfully registered {payload.get('name')}.",
+            "record": internal_record
+        }
+
+    def handle_mcp_invocation(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Universal MCP tool execution dispatcher."""
+        expected_tool = self.contract["mcp_tool"]["name"]
+        if tool_name != expected_tool:
+            return {"success": False, "error": f"Tool '{tool_name}' not found. Expected '{expected_tool}'."}
+        return self.process_submission(arguments)
+```
+
+--------------------------------------------------------------------------------
+6.3. TypeScript / Node.js Reference Runtime
+--------------------------------------------------------------------------------
+```typescript
+import { readFileSync } from 'fs';
+
+export interface McpToolCall {
+  name: string;
+  arguments: Record<string, any>;
+}
+
+export class AgnosticAgentFormRouter {
+  private contract: any;
+
+  constructor(contractPath: string = './schema_contract.json') {
+    this.contract = JSON.parse(readFileSync(contractPath, 'utf-8'));
+  }
+
+  public getRegistrationSchema() {
+    return this.contract;
+  }
+
+  public getMcpTools() {
+    return { tools: [this.contract.mcp_tool] };
+  }
+
+  public async executeMcpTool(call: McpToolCall) {
+    if (call.name !== this.contract.mcp_tool.name) {
+      throw new Error(`Unknown MCP Tool: ${call.name}`);
+    }
+    return this.processEntity(call.arguments);
+  }
+
+  public async processEntity(data: Record<string, any>) {
+    // 1. Separate billing vs private internal data
+    const { date_of_birth, education_history, ...externalData } = data;
+
+    // 2. Mock external client ID
+    const clientId = `client_${Date.now()}`;
+
+    // 3. Assemble complete internal store object
+    const internalStoreRecord = {
+      clientId,
+      ...data,
+      systemTag: 'canonical_v2',
+      registeredAt: new Date().toISOString()
+    };
+
+    return {
+      success: true,
+      clientId,
+      record: internalStoreRecord
+    };
+  }
+}
+```
+
+--------------------------------------------------------------------------------
+6.4. Dual-Mode UI Architecture (Web Form + Agent JSON Auto-Fill Console)
+--------------------------------------------------------------------------------
+A standard component pattern that presents both an interactive human UI and 
+an instant AI Agent importer console:
+
+```jsx
+import React, { useState } from 'react';
+
+export default function UniversalDualModeForm({ schema, onSubmitted }) {
+  const [viewMode, setViewMode] = useState('form'); // 'form' | 'agent_console'
+  const [formData, setFormData] = useState({});
+  const [agentJsonInput, setAgentJsonInput] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
+
+  // 1. Universal Agent JSON Auto-Fill Parser
+  const handleAutoFillFromAgent = () => {
+    try {
+      const parsed = JSON.parse(agentJsonInput);
+      setFormData(prev => ({ ...prev, ...parsed }));
+      setStatusMessage('Data successfully mapped from AI Agent output!');
+      setViewMode('form');
+    } catch (err) {
+      alert('Invalid Agent JSON: ' + err.message);
+    }
+  };
+
+  // 2. Copy MCP Tool Definition
+  const handleCopyMcp = () => {
+    navigator.clipboard.writeText(JSON.stringify(schema.mcp_tool, null, 2));
+    setStatusMessage('MCP Tool Schema copied to clipboard!');
+  };
+
+  return (
+    <div className="universal-form-container">
+      {/* View Switcher Tabs */}
+      <div className="tab-header">
+        <button 
+          onClick={() => setViewMode('form')}
+          className={viewMode === 'form' ? 'active-tab' : ''}
+        >
+          Interactive Form
+        </button>
+        <button 
+          onClick={() => setViewMode('agent_console')}
+          className={viewMode === 'agent_console' ? 'active-tab' : ''}
+        >
+          AI Agent & MCP Console
+        </button>
+      </div>
+
+      {statusMessage && <div className="status-banner">{statusMessage}</div>}
+
+      {viewMode === 'form' ? (
+        <form onSubmit={(e) => { e.preventDefault(); onSubmitted(formData); }}>
+          {/* Dynamically or statically render fields according to schema */}
+          {schema.conversational_flow.map(step => (
+            <div key={step.field} className="form-group">
+              <label>{step.agent_question}</label>
+              <input 
+                type={step.format === 'email' ? 'email' : step.format === 'YYYY-MM-DD' ? 'date' : 'text'}
+                value={formData[step.field] || ''}
+                onChange={e => setFormData({ ...formData, [step.field]: e.target.value })}
+                required={step.required}
+              />
+            </div>
+          ))}
+          <button type="submit">Submit Record</button>
+        </form>
+      ) : (
+        <div className="agent-console">
+          <div className="action-row">
+            <button onClick={handleCopyMcp}>Copy MCP Tool Schema</button>
+          </div>
+          <p>Paste the structured JSON payload produced by your AI Agent below:</p>
+          <textarea 
+            rows={10} 
+            value={agentJsonInput} 
+            onChange={e => setAgentJsonInput(e.target.value)} 
+            placeholder='{"name": "Jane Doe", "email": "jane@example.com", ...}'
+          />
+          <button onClick={handleAutoFillFromAgent}>Auto-Fill Form with Agent Data</button>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+
+7. MULTI-DOMAIN BLUEPRINT CATALOG
+--------------------------------------------------------------------------------
+The UADIS standard adapts instantaneously to any vertical industry. Below are 
+four plug-and-play domain patterns:
+
+--------------------------------------------------------------------------------
+7.1. Domain A: Customer Identity & Billing (FinTech / SaaS)
+--------------------------------------------------------------------------------
+- Entity: `customer_billing_account`
+- Third-Party Destination: Payment Gateway (Stripe / Adyen).
+- Internal Destination: Core Financial Ledger.
+- Fields:
+  * `company_name`: string (required)
+  * `billing_email`: string, format: email (required)
+  * `vat_or_abn_number`: string (conditional on business registration)
+  * `primary_currency`: string (enum: USD, AUD, EUR, GBP)
+  * `billing_address`: object (line1, city, postal_code, country)
+- Public Label: "Client ID"
+- Hidden Telemetry: Merchant routing code, invoice prefix, internal ledger tag.
+
+--------------------------------------------------------------------------------
+7.2. Domain B: Student Admissions & Academic Profile (EdTech / LMS)
+--------------------------------------------------------------------------------
+- Entity: `student_enrollment`
+- Third-Party Destination: Course fee payment processor.
+- Internal Destination: Student Information System (SIS) / Firebase LMS.
+- Fields:
+  * `legal_name`: string (required)
+  * `email`: string, format: email (required)
+  * `date_of_birth`: string, format: YYYY-MM-DD (INTERNAL STORE ONLY)
+  * `education_history`: object (highest degree, institution, major) (INTERNAL ONLY)
+  * `course_id`: string (enrolled course identifier)
+  * `tuition_billing_address`: object (required for tax invoices)
+- Public Label: "Student Client ID"
+- Hidden Telemetry: Payment net terms, curriculum tag ('lms'), draft flags.
+
+--------------------------------------------------------------------------------
+7.3. Domain C: Patient Intake & Medical History (Healthcare / Clinic)
+--------------------------------------------------------------------------------
+- Entity: `patient_intake`
+- Third-Party Destination: Health insurance verification gateway.
+- Internal Destination: Electronic Health Record (EHR) HIPAA/GDPR Encrypted Vault.
+- Fields:
+  * `patient_full_name`: string (required)
+  * `contact_phone`: string (required)
+  * `date_of_birth`: string, format: YYYY-MM-DD (VAULT ONLY)
+  * `emergency_contact`: object (name, relationship, phone) (VAULT ONLY)
+  * `allergies_and_medications`: array of strings (VAULT ONLY)
+  * `insurance_policy_number`: string (EXTERNAL GATEWAY ONLY)
+- Public Label: "Patient Reference Number"
+- Hidden Telemetry: Clinical ICD-10 triage classification, internal doctor queue ID.
+
+--------------------------------------------------------------------------------
+7.4. Domain D: Vendor Onboarding & Procurement (Enterprise B2B)
+--------------------------------------------------------------------------------
+- Entity: `vendor_supplier`
+- Third-Party Destination: Enterprise ERP (SAP / NetSuite).
+- Internal Destination: Vendor Master Database.
+- Fields:
+  * `legal_business_name`: string (required)
+  * `corporate_identification_number`: string (required)
+  * `compliance_certifications`: array of strings (e.g., ISO27001, SOC2)
+  * `remittance_bank_account`: object (IBAN, SWIFT, Account Holder) (ENCRYPTED)
+  * `accounts_receivable_email`: string, format: email (required)
+- Public Label: "Vendor Partner ID"
+- Hidden Telemetry: Procurement credit rating, discount payment terms (2/10 Net 30).
+
+
+8. AGNOSTIC AGENTIC COMPLIANCE CHECKLIST
+--------------------------------------------------------------------------------
+Before shipping any new form or data-entry workflow, verify compliance against 
+this 10-point checklist:
+
+[ ] 1. ZERO UI DEPENDENCIES IN PROMPTS
+    Questions never mention buttons, colors, mouse clicks, tabs, or screens.
+
+[ ] 2. SEQUENTIAL & CONDITIONAL LOGIC DECLARED
+    The conversational flow specifies step numbers and optional skip conditions.
+
+[ ] 3. FORMAL MCP TOOL EXPORTED
+    The system exports an MCP tool with `name`, `description`, `inputSchema`, 
+    and typed `properties`.
+
+[ ] 4. STRICT PRIVACY & DATA BIFURCATION
+    Internal academic, identity, or health data is explicitly stripped before 
+    sending payloads to external billing or marketing processors.
+
+[ ] 5. HUMAN-FRIENDLY PUBLIC LABELS
+    All external technical IDs (e.g. `stripe_customer_id`, `sub_123`) are labeled 
+    neutrally as "Client ID" or "Account ID".
+
+[ ] 6. SUPERADMIN / TELEMETRY PROTECTION
+    Internal tags (e.g. `tag: 'lms'`), payment terms, and draft prefixes are 
+    accessible strictly to privileged administrative roles.
+
+[ ] 7. STANDARDIZED API ENDPOINTS
+    The backend provides:
+      - `GET  /api/<entity>/schema`
+      - `GET  /api/mcp/tools`
+      - `POST /api/mcp/invoke`
+
+[ ] 8. DUAL-MODE UI READY
+    The web interface contains both a manual form and an AI Agent JSON importer 
+    with 1-click auto-fill and schema clipboard copy.
+
+[ ] 9. ROBUST ERROR RECOVERY
+    Clarification prompts guide the user when input is ambiguous or non-standard,
+    avoiding raw code errors.
+
+[ ] 10. REUSABLE CONTRACT STORAGE
+    The contract is preserved in plain text (`.txt` or `.json`) so any future 
+    developer or subagent can adopt it immediately.
+
+================================================================================
+END OF SPECIFICATION: UNIVERSAL AGNOSTIC AGENTIC DATA INGESTION & MCP SPECIFICATION
+================================================================================

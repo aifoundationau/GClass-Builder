@@ -37,8 +37,12 @@ import {
   Plus,
   Compass,
   ArrowRight,
-  X
+  X,
+  CreditCard,
+  Tag,
+  Bot
 } from 'lucide-react';
+import RegistrationModal from './components/RegistrationModal';
 
 const SAMPLE_PRESETS = {
   cloud: {
@@ -198,10 +202,32 @@ const SAMPLE_PRESETS = {
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
+  const SUPERADMIN_EMAIL = "support@aifoundation.net.au";
+  const isSuperAdmin = currentUser?.email?.toLowerCase() === SUPERADMIN_EMAIL.toLowerCase();
+
   const [loginEmail, setLoginEmail] = useState("");
   const [loginName, setLoginName] = useState("");
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showRegistrationModal, setShowRegistrationModal] = useState(false);
+  const [registrationModalView, setRegistrationModalView] = useState('form');
+  const [lmsMembers, setLmsMembers] = useState([]);
+  const [loadingLmsMembers, setLoadingLmsMembers] = useState(false);
+
+  const fetchLmsMembers = async () => {
+    setLoadingLmsMembers(true);
+    try {
+      const res = await fetch('/api/users/lms');
+      const data = await res.json();
+      if (data && data.users) {
+        setLmsMembers(data.users);
+      }
+    } catch (err) {
+      console.error("Failed to fetch LMS users:", err);
+    } finally {
+      setLoadingLmsMembers(false);
+    }
+  };
 
   const [activeTab, setActiveTab] = useState('studio');
   const [settings, setSettings] = useState(SAMPLE_PRESETS.cloud.settings);
@@ -452,6 +478,30 @@ export default function App() {
   const handleLogin = () => {
     setIsLoggingIn(true);
     window.location.href = '/api/auth/google_login';
+  };
+
+  const handleEmailLogin = async (e) => {
+    if (e) e.preventDefault();
+    const emailToUse = loginEmail.trim() || "support@aifoundation.net.au";
+    const nameToUse = loginName.trim() || "Support AI Foundation";
+    try {
+      setIsLoggingIn(true);
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailToUse, name: nameToUse })
+      });
+      const data = await res.json();
+      if (data && data.success && data.user) {
+        setCurrentUser(data.user);
+        setShowLoginModal(false);
+        showToast(`Signed in as ${data.user.name}`);
+      }
+    } catch (err) {
+      console.error("Login failed:", err);
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
 
   const handleLogout = async () => {
@@ -1236,6 +1286,31 @@ export default function App() {
                 <span>{isLoggingIn ? "Redirecting to Google..." : "Sign in with Google Classroom"}</span>
               </button>
 
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0' }}>
+                <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+                <span style={{ fontSize: '0.72rem', color: '#94a3b8', textTransform: 'uppercase' }}>or sign in directly</span>
+                <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+              </div>
+
+              <form onSubmit={handleEmailLogin} style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <input
+                  type="email"
+                  className="form-control"
+                  placeholder="support@aifoundation.net.au"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  style={{ fontSize: '0.84rem' }}
+                />
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  style={{ width: '100%', justifyContent: 'center', padding: '9px', fontSize: '0.84rem', background: '#34a853' }}
+                >
+                  <User size={15} />
+                  <span>Instant Sign In (Simulator Mode)</span>
+                </button>
+              </form>
+
               <div style={{ marginTop: '8px', background: 'rgba(52, 168, 83, 0.08)', border: '1px solid rgba(52, 168, 83, 0.25)', borderRadius: '10px', padding: '10px 12px', display: 'flex', gap: '10px', alignItems: 'center' }}>
                 <ShieldCheck size={16} color="#34a853" style={{ flexShrink: 0 }} />
                 <div style={{ fontSize: '0.74rem', color: '#cbd5e1' }}>
@@ -1580,9 +1655,23 @@ export default function App() {
                 <LogOut size={16} />
               </button>
             </div>
-            <div style={{ marginTop: '8px', fontSize: '0.68rem', color: '#34a853', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}>
-              <span className="logged-in-dot" style={{ width: '6px', height: '6px' }} />
-              <span>Logged In to Classroom</span>
+            <div style={{ marginTop: '8px', fontSize: '0.68rem', color: '#34a853', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontWeight: 600 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span className="logged-in-dot" style={{ width: '6px', height: '6px' }} />
+                <span>Logged In to Classroom</span>
+              </div>
+              {isSuperAdmin && (
+                <span style={{
+                  background: 'rgba(99, 102, 241, 0.25)',
+                  color: '#a78bfa',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  fontSize: '0.65rem',
+                  fontWeight: 700
+                }}>
+                  SUPERADMIN
+                </span>
+              )}
             </div>
           </div>
         ) : (
@@ -1592,13 +1681,23 @@ export default function App() {
                 <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#cbd5e1' }}>Not Signed In</div>
                 <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Guest Spreadsheet Mode</div>
               </div>
-              <button
-                onClick={() => setShowLoginModal(true)}
-                className="btn-secondary"
-                style={{ padding: '5px 10px', fontSize: '0.78rem', borderColor: 'rgba(66, 133, 244, 0.5)', color: '#1e40af' }}
-              >
-                Log In
-              </button>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  onClick={() => setShowLoginModal(true)}
+                  className="btn-secondary"
+                  style={{ padding: '5px 8px', fontSize: '0.75rem', borderColor: 'rgba(66, 133, 244, 0.5)', color: '#1e40af' }}
+                >
+                  Log In
+                </button>
+                <button
+                  onClick={() => setShowRegistrationModal(true)}
+                  className="btn-primary"
+                  style={{ padding: '5px 10px', fontSize: '0.75rem', background: '#6366f1', color: '#fff', border: 'none', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
+                >
+                  <CreditCard size={12} />
+                  <span>Register</span>
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1637,6 +1736,22 @@ export default function App() {
             <ShieldCheck size={18} />
             <span>Safety & API Audit</span>
           </button>
+
+          <button
+            className={`nav-item ${activeTab === 'lms-members' ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('lms-members');
+              fetchLmsMembers();
+            }}
+          >
+            <Users size={18} />
+            <span>LMS Members</span>
+            {isSuperAdmin ? (
+              <span className="nav-badge" style={{ background: '#6366f1' }}>tag: lms</span>
+            ) : (
+              <span className="nav-badge">{lmsMembers.length}</span>
+            )}
+          </button>
         </nav>
 
         {/* Server & Safety Guardrail Badge */}
@@ -1670,12 +1785,16 @@ export default function App() {
               {activeTab === 'courses' && "Active Classroom Courses"}
               {activeTab === 'sync' && "Non-Destructive Course Update"}
               {activeTab === 'audit' && "API Security & Guardrail Audit"}
+              {activeTab === 'lms-members' && "LMS Registered Members (Stripe & Firebase)"}
             </h1>
             <p className="page-desc">
               {activeTab === 'studio' && "Step through one module at a time. All panels are collapsible dropdowns to maximize workspace."}
               {activeTab === 'courses' && "Live courses published in Google Classroom with enrollment codes and topic lists."}
               {activeTab === 'sync' && "Safely sync spreadsheet changes into Google Classroom without deleting existing items."}
               {activeTab === 'audit' && "Static AST verification verifying NO-DELETE safety policy and presentation link compliance."}
+              {activeTab === 'lms-members' && (isSuperAdmin 
+                ? "Centralized members database synced with Stripe Client IDs and tagged with 'lms' for shared access."
+                : "Centralized directory of registered course members and client accounts.")}
             </p>
           </div>
 
@@ -1733,8 +1852,20 @@ export default function App() {
                   {currentUser.name ? currentUser.name.charAt(0).toUpperCase() : "T"}
                 </div>
                 <div className="top-user-info">
-                  <div className="top-user-name">
-                    {currentUser.name || "Instructor"}
+                  <div className="top-user-name" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>{currentUser.name || "Instructor"}</span>
+                    {isSuperAdmin && (
+                      <span style={{
+                        background: 'rgba(99, 102, 241, 0.25)',
+                        color: '#a78bfa',
+                        padding: '1px 5px',
+                        borderRadius: '4px',
+                        fontSize: '0.62rem',
+                        fontWeight: 700
+                      }}>
+                        SUPERADMIN
+                      </span>
+                    )}
                   </div>
                   <div className="top-user-email">
                     {currentUser.email}
@@ -3034,6 +3165,360 @@ export default function App() {
                   <div><code>.venv\Scripts\python classroom_course_engine.py --sync --course-id mock-course-101 --file course_curriculum.xlsx</code></div>
                   <div><code>.venv\Scripts\python classroom_course_engine.py --test</code></div>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* TAB 5: LMS REGISTERED MEMBERS (STRIPE & FIREBASE) */}
+        {/* ================================================================= */}
+        {activeTab === 'lms-members' && (
+          <div className="animate-fade-in">
+            <div className="glass-panel" style={{ padding: '28px', marginBottom: '28px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#818cf8' }}>
+                    <Users size={22} />
+                  </div>
+                  <div>
+                    <h2 style={{ fontSize: '1.25rem', color: 'var(--text-main)', margin: 0 }}>
+                      LMS Registered Members & Stripe Customers
+                    </h2>
+                    <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)', margin: '4px 0 0' }}>
+                      {isSuperAdmin ? (
+                        <>All records are tagged with <span style={{ color: '#a78bfa', fontWeight: 600 }}>'lms'</span> for shared cross-site usage in Firebase and Stripe.</>
+                      ) : (
+                        <>Directory of registered course members and client billing profiles.</>
+                      )}
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <button
+                    onClick={fetchLmsMembers}
+                    className="btn-secondary"
+                    style={{ padding: '8px 14px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+                    title="Refresh database"
+                  >
+                    <RefreshCw size={14} className={loadingLmsMembers ? 'spin' : ''} />
+                    <span>Refresh</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setRegistrationModalView('agent');
+                      setShowRegistrationModal(true);
+                    }}
+                    className="btn-secondary"
+                    style={{ padding: '8px 14px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px', borderColor: 'rgba(129, 140, 248, 0.4)', color: '#c7d2fe' }}
+                    title="View agnostic AI Agent questionnaire & MCP Tool schema"
+                  >
+                    <Bot size={15} color="#818cf8" />
+                    <span>AI Agent & MCP Specs</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setRegistrationModalView('form');
+                      setShowRegistrationModal(true);
+                    }}
+                    className="btn-primary"
+                    style={{ padding: '8px 16px', fontSize: '0.84rem', background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)', border: 'none', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', borderRadius: '8px' }}
+                  >
+                    <CreditCard size={15} />
+                    <span>Register New Member</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Status / Policy Summary Cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px', marginBottom: '24px' }}>
+                <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Members</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#f8fafc', marginTop: '4px' }}>{lmsMembers.length}</div>
+                  <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: '4px' }}>Enrolled Clients & Students</div>
+                </div>
+
+                <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Billing Engine</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#38bdf8', marginTop: '4px' }}>Stripe Verified</div>
+                  <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: '4px' }}>PCI-DSS Level 1 Secure</div>
+                </div>
+
+                {/* Internal cards: only visible to superadmin (support@aifoundation.net.au) */}
+                {isSuperAdmin && (
+                  <>
+                    <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
+                      <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Shared System Tag</div>
+                      <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#a78bfa', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Tag size={18} />
+                        <span>lms</span>
+                      </div>
+                      <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: '4px' }}>Cross-app Firebase & Stripe index</div>
+                    </div>
+
+                    <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
+                      <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Invoice Prefix & Review</div>
+                      <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#34a853', marginTop: '4px' }}>LMS (Draft Policy)</div>
+                      <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: '4px' }}>30-day payment terms</div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Members Table */}
+              {lmsMembers.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '48px 20px', background: 'rgba(255, 255, 255, 0.01)', border: '1px dashed var(--border-color)', borderRadius: '12px' }}>
+                  <Users size={36} color="#64748b" style={{ margin: '0 auto 12px' }} />
+                  <div style={{ fontSize: '1rem', fontWeight: 600, color: '#cbd5e1', marginBottom: '6px' }}>
+                    No LMS Members Registered Yet
+                  </div>
+                  <p style={{ fontSize: '0.82rem', color: '#94a3b8', maxWidth: '400px', margin: '0 auto 18px' }}>
+                    {isSuperAdmin
+                      ? "Click \"Register New Member\" to create your first customer in Stripe and synchronize them to Firebase with tag 'lms'."
+                      : "Click \"Register New Member\" to create your client billing account."}
+                  </p>
+                  <button
+                    onClick={() => setShowRegistrationModal(true)}
+                    className="btn-primary"
+                    style={{ padding: '8px 20px', background: '#6366f1', border: 'none', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontSize: '0.85rem' }}
+                  >
+                    Open Registration Form
+                  </button>
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '12px', background: '#0b0f19' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.83rem', textAlign: 'left' }}>
+                    <thead>
+                      <tr style={{ background: 'rgba(255, 255, 255, 0.03)', borderBottom: '1px solid var(--border-color)' }}>
+                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Member / Organization</th>
+                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Email & Phone</th>
+                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Role</th>
+                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Client ID</th>
+                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Billing Location</th>
+                        {isSuperAdmin && (
+                          <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Database Tag</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lmsMembers.map((m, idx) => (
+                        <tr key={idx} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)' }}>
+                          <td style={{ padding: '12px 16px' }}>
+                            <div style={{ fontWeight: 600, color: '#f8fafc' }}>
+                              {m.account_type === 'organization' ? m.business_name : m.name}
+                            </div>
+                            {m.account_type === 'organization' && m.name && (
+                              <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>Contact: {m.name}</div>
+                            )}
+                            {(m.date_of_birth || m.education_history) && (
+                              <div style={{ marginTop: '5px', fontSize: '0.72rem', display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                                {m.date_of_birth && (
+                                  <span style={{ 
+                                    background: 'rgba(56, 189, 248, 0.1)', 
+                                    border: '1px solid rgba(56, 189, 248, 0.25)', 
+                                    color: '#38bdf8', 
+                                    padding: '1px 6px', 
+                                    borderRadius: '4px' 
+                                  }}>
+                                    DoB: {m.date_of_birth}
+                                  </span>
+                                )}
+                                {(m.education_history?.highest_level || m.education_history?.field_of_study) && (
+                                  <span style={{ 
+                                    background: 'rgba(168, 85, 247, 0.1)', 
+                                    border: '1px solid rgba(168, 85, 247, 0.25)', 
+                                    color: '#c084fc', 
+                                    padding: '1px 6px', 
+                                    borderRadius: '4px' 
+                                  }}>
+                                    Edu: {m.education_history.highest_level || 'Enrolled'}{m.education_history.field_of_study ? ` (${m.education_history.field_of_study})` : ''}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td style={{ padding: '12px 16px' }}>
+                            <div style={{ color: '#cbd5e1' }}>{m.email}</div>
+                            {m.phone && <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>{m.phone}</div>}
+                          </td>
+                          <td style={{ padding: '12px 16px' }}>
+                            <span style={{
+                              padding: '2px 8px',
+                              borderRadius: '4px',
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              background: m.role === 'school_admin' ? 'rgba(239, 68, 68, 0.15)' : m.role === 'instructor' ? 'rgba(52, 168, 83, 0.15)' : 'rgba(66, 133, 244, 0.15)',
+                              color: m.role === 'school_admin' ? '#f87171' : m.role === 'instructor' ? '#34a853' : '#60a5fa'
+                            }}>
+                              {m.role || 'student'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#818cf8', fontSize: '0.78rem' }}>
+                            {m.stripe_customer_id}
+                          </td>
+                          <td style={{ padding: '12px 16px', color: '#94a3b8', fontSize: '0.78rem' }}>
+                            {m.address?.city ? `${m.address.city}, ${m.address.country || 'AU'}` : 'Global'}
+                          </td>
+                          {isSuperAdmin && (
+                            <td style={{ padding: '12px 16px' }}>
+                              <span style={{
+                                background: 'rgba(139, 92, 246, 0.2)',
+                                color: '#c084fc',
+                                padding: '2px 8px',
+                                borderRadius: '6px',
+                                fontSize: '0.72rem',
+                                fontWeight: 700
+                              }}>
+                                lms
+                              </span>
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Stripe Registration Modal */}
+        <RegistrationModal
+          isOpen={showRegistrationModal}
+          initialView={registrationModalView}
+          onClose={() => setShowRegistrationModal(false)}
+          currentUser={currentUser}
+          isSuperAdmin={isSuperAdmin}
+          onCustomerCreated={() => {
+            fetchLmsMembers();
+          }}
+        />
+
+        {/* Sign In & Quick Switch Modal */}
+        {showLoginModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(5, 7, 15, 0.85)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: '20px'
+          }}>
+            <div style={{
+              background: '#131722',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              borderRadius: '16px',
+              width: '100%',
+              maxWidth: '460px',
+              padding: '28px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 40px rgba(66, 133, 244, 0.15)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '18px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(66, 133, 244, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4285f4' }}>
+                    <User size={20} />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#f8fafc' }}>Sign In to Studio</h3>
+                    <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: '#94a3b8' }}>Select your account or login with Google</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowLoginModal(false)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* Google OAuth Login Button */}
+              <button
+                onClick={handleLogin}
+                className="google-btn-top"
+                style={{ width: '100%', padding: '12px', justifyContent: 'center', fontSize: '0.9rem', gap: '10px' }}
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+                </svg>
+                <span>Sign in with Google Classroom</span>
+              </button>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+                <span style={{ fontSize: '0.72rem', color: '#64748b', fontWeight: 600 }}>TEST IDENTITY SWITCH</span>
+                <div style={{ flex: 1, height: '1px', background: 'rgba(255, 255, 255, 0.1)' }} />
+              </div>
+
+              {/* Fast switch buttons for superadmin vs student */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginEmail("support@aifoundation.net.au");
+                    setLoginName("Support AI Foundation");
+                    handleEmailLogin();
+                  }}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    background: 'rgba(99, 102, 241, 0.15)',
+                    border: '1px solid rgba(99, 102, 241, 0.35)',
+                    color: '#c7d2fe',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '0.82rem'
+                  }}
+                >
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ fontWeight: 600, color: '#f8fafc' }}>Sign in as Superadmin</div>
+                    <div style={{ fontSize: '0.72rem', color: '#a5b4fc' }}>support@aifoundation.net.au</div>
+                  </div>
+                  <span style={{ background: '#6366f1', color: '#fff', fontSize: '0.68rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                    SUPERADMIN
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginEmail("student@test.com");
+                    setLoginName("Student User");
+                    handleEmailLogin();
+                  }}
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#cbd5e1',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    fontSize: '0.82rem'
+                  }}
+                >
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ fontWeight: 600, color: '#f8fafc' }}>Sign in as Standard Customer</div>
+                    <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>student@test.com</div>
+                  </div>
+                  <span style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#94a3b8', fontSize: '0.68rem', padding: '2px 6px', borderRadius: '4px' }}>
+                    CUSTOMER
+                  </span>
+                </button>
               </div>
             </div>
           </div>

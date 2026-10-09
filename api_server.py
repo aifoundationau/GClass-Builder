@@ -39,6 +39,8 @@ try:
 except ImportError:
     pass
 
+import stripe_lms_service
+
 USER_SESSION_FILE = "user_session.json"
 GLOBAL_SERVICE = None
 OAUTH_FLOW_CACHE = {}
@@ -110,7 +112,43 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
-        if path == "/api/status":
+        if path in ("/", "", "/index.html"):
+            dist_index = os.path.join(os.path.dirname(__file__), "dist", "index.html")
+            if os.path.exists(dist_index):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                with open(dist_index, "rb") as f:
+                    content = f.read()
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+            else:
+                self.send_response(302)
+                self.send_header("Location", "http://localhost:5173/")
+                self.end_headers()
+                return
+
+        elif path.startswith("/assets/"):
+            asset_path = os.path.join(os.path.dirname(__file__), "dist", path.lstrip("/"))
+            if os.path.exists(asset_path):
+                self.send_response(200)
+                if asset_path.endswith(".js"):
+                    self.send_header("Content-Type", "application/javascript")
+                elif asset_path.endswith(".css"):
+                    self.send_header("Content-Type", "text/css")
+                elif asset_path.endswith(".svg"):
+                    self.send_header("Content-Type", "image/svg+xml")
+                else:
+                    self.send_header("Content-Type", "application/octet-stream")
+                with open(asset_path, "rb") as f:
+                    content = f.read()
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
+        elif path == "/api/status":
             is_safe, violations = audit_codebase_safety()
             has_creds = os.path.exists(CREDENTIALS_FILE) or os.path.exists(TOKEN_FILE)
             user = get_current_user_session()
@@ -126,6 +164,22 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         elif path == "/api/auth/me":
             user = get_current_user_session()
             self._send_json(200, user)
+
+        elif path == "/api/stripe/config":
+            self._send_json(200, stripe_lms_service.get_stripe_config())
+
+        elif path == "/api/registration/schema":
+            self._send_json(200, stripe_lms_service.get_agentic_registration_schema())
+
+        elif path == "/api/mcp/tools":
+            schema = stripe_lms_service.get_agentic_registration_schema()
+            self._send_json(200, {
+                "tools": [schema["mcp_tool"]]
+            })
+
+        elif path == "/api/users/lms":
+            users = stripe_lms_service.load_all_lms_users()
+            self._send_json(200, {"users": users, "tag": "lms", "count": len(users)})
 
         elif path == "/api/auth/google_login":
             try:
@@ -463,6 +517,160 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 "error": "Course duplication is strictly disabled per safety requirements ('no duplicate course'). Please create courses directly or update existing ones."
             })
 
+        # 6. Stripe LMS Customer Registration
+        elif path == "/api/stripe/create-customer":
+            try:
+                body = self._read_json_body()
+                customer = stripe_lms_service.create_stripe_customer(body)
+
+                # SetupIntent if card collection requested
+                setup_intent = None
+                if body.get("saveCard", False):
+                    try:
+                        setup_intent = stripe_lms_service.create_setup_intent(customer["id"])
+                    except Exception as si_err:
+                        print(f"[STRIPE WARN] SetupIntent skipped: {si_err}")
+
+                # Save user to Firebase store with mandatory 'lms' tag
+                account_type = body.get("accountType") or body.get("account_type", "individual")
+                dob = str(body.get("dateOfBirth") or body.get("date_of_birth") or "").strip()
+                
+                # Format education history (academic record only, excluded from Stripe)
+                raw_edu = body.get("educationHistory") or body.get("education_history") or {}
+                if isinstance(raw_edu, dict):
+                    edu_record = {
+                        "level": raw_edu.get("level") or body.get("educationLevel") or "Bachelor's Degree",
+                        "institution": raw_edu.get("institution") or body.get("institutionName") or "",
+                        "field_of_study": raw_edu.get("field_of_study") or body.get("fieldOfStudy") or "",
+                        "notes": raw_edu.get("notes") or body.get("educationNotes") or ""
+                    }
+                else:
+                    edu_record = {
+                        "level": body.get("educationLevel") or "Bachelor's Degree",
+                        "institution": body.get("institutionName") or "",
+                        "field_of_study": body.get("fieldOfStudy") or "",
+                        "notes": str(raw_edu) if str(raw_edu).strip() else body.get("educationNotes", "")
+                    }
+
+                user_record = {
+                    "uid": f"lms_usr_{customer['id'].replace('cus_', '')}",
+                    "email": body.get("email"),
+                    "name": body.get("name"),
+                    "business_name": body.get("businessName") or body.get("business_name", ""),
+                    "account_type": account_type,
+                    "role": body.get("role", "student"),
+                    "date_of_birth": dob,
+                    "education_history": edu_record,
+                    "phone": body.get("phone", ""),
+                    "address": body.get("address", {}),
+                    "tax_id": body.get("taxId") or body.get("tax_id", ""),
+                    "stripe_customer_id": customer["id"],
+                    "invoice_policy": {
+                        "default_status": "draft",
+                        "payment_terms_days": 30,
+                        "prefix": "LMS"
+                    },
+                    "tags": ["lms"],
+                    "source": "lms"
+                }
+                saved_user = stripe_lms_service.save_lms_user_record(user_record)
+
+                self._send_json(200, {
+                    "success": True,
+                    "client_id": customer["id"],
+                    "customer": customer,
+                    "user": saved_user,
+                    "setupIntent": setup_intent,
+                    "message": "Student registered successfully. Client ID generated and academic profile saved."
+                })
+            except Exception as e:
+                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+
+        # 7. Model Context Protocol (MCP) Tool Execution Endpoint
+        elif path == "/api/mcp/invoke":
+            try:
+                body = self._read_json_body()
+                tool_name = body.get("tool") or body.get("name")
+                args = body.get("arguments") or body.get("parameters") or body
+                if tool_name and tool_name != "register_student_member":
+                    self._send_json(400, {"error": f"Unknown tool: {tool_name}. Available tools: ['register_student_member']"})
+                    return
+
+                # Normalise arguments
+                payload = {
+                    "accountType": args.get("account_type") or args.get("accountType", "individual"),
+                    "name": args.get("name", ""),
+                    "businessName": args.get("business_name") or args.get("businessName", ""),
+                    "email": args.get("email", ""),
+                    "phone": args.get("phone", ""),
+                    "dateOfBirth": args.get("date_of_birth") or args.get("dateOfBirth", ""),
+                    "educationHistory": args.get("education_history") or args.get("educationHistory", {}),
+                    "role": args.get("role", "student"),
+                    "taxId": args.get("tax_id") or args.get("taxId", ""),
+                    "address": args.get("address", {}),
+                    "saveCard": args.get("save_card") or args.get("saveCard", False)
+                }
+
+                customer = stripe_lms_service.create_stripe_customer(payload)
+
+                raw_edu = payload.get("educationHistory") or {}
+                if isinstance(raw_edu, dict):
+                    edu_record = {
+                        "level": raw_edu.get("level") or "Bachelor's Degree",
+                        "institution": raw_edu.get("institution") or "",
+                        "field_of_study": raw_edu.get("field_of_study") or "",
+                        "notes": raw_edu.get("notes") or ""
+                    }
+                else:
+                    edu_record = {"level": "Other", "notes": str(raw_edu)}
+
+                user_record = {
+                    "uid": f"lms_usr_{customer['id'].replace('cus_', '')}",
+                    "email": payload.get("email"),
+                    "name": payload.get("name"),
+                    "business_name": payload.get("businessName", ""),
+                    "account_type": payload.get("accountType", "individual"),
+                    "role": payload.get("role", "student"),
+                    "date_of_birth": str(payload.get("dateOfBirth", "")).strip(),
+                    "education_history": edu_record,
+                    "phone": payload.get("phone", ""),
+                    "address": payload.get("address", {}),
+                    "tax_id": payload.get("taxId", ""),
+                    "stripe_customer_id": customer["id"],
+                    "invoice_policy": {
+                        "default_status": "draft",
+                        "payment_terms_days": 30,
+                        "prefix": "LMS"
+                    },
+                    "tags": ["lms"],
+                    "source": "lms"
+                }
+                saved_user = stripe_lms_service.save_lms_user_record(user_record)
+
+                self._send_json(200, {
+                    "success": True,
+                    "client_id": customer["id"],
+                    "customer": customer,
+                    "user": saved_user,
+                    "agent_summary": f"Registration completed for student '{user_record['name']}'. Client ID is '{customer['id']}'. Academic profile successfully stored."
+                })
+            except Exception as e:
+                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+
+        # 7. Attach Saved Card to Customer
+        elif path == "/api/stripe/attach-card":
+            try:
+                body = self._read_json_body()
+                customer_id = body.get("customer_id")
+                payment_method_id = body.get("payment_method_id")
+                if not customer_id or not payment_method_id:
+                    self._send_json(400, {"error": "Missing customer_id or payment_method_id"})
+                    return
+                updated = stripe_lms_service.attach_payment_method(customer_id, payment_method_id)
+                self._send_json(200, {"success": True, "customer": updated})
+            except Exception as e:
+                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+
         else:
             self._send_json(404, {"error": f"Path not found: {path}"})
 
@@ -481,7 +689,7 @@ def run_api_server(port: int = 8000):
     httpd = HTTPServer(server_address, CourseBuilderAPIHandler)
     print(f"[API SERVER] Running Course Builder REST API at http://localhost:{port}/")
     import webbrowser
-    webbrowser.open(f"http://127.0.0.1:{port}/")
+    webbrowser.open("http://localhost:5173/")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
