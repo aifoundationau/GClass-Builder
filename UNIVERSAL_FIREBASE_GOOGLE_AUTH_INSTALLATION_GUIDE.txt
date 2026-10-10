@@ -403,6 +403,20 @@ STEP 2: CONFIGURE AUTHENTICATION & GOOGLE PROVIDER
    - `your-vercel-deployment.vercel.app`
    - `yourcustomdomain.com` (for Namecheap, Hostinger, GoDaddy, etc.)
 
+STEP 2.1: CONFIGURE GOOGLE CLOUD CONSOLE OAUTH CLIENT ID (MANDATORY FOR BACKEND APIS)
+If your app connects to Google Classroom, Drive, or Google APIs with server-side scopes:
+1. Open https://console.cloud.google.com/apis/credentials
+2. Select your Google Cloud Project (e.g. `gen-lang-client-0551298781`).
+3. Click your OAuth 2.0 Client ID (e.g. `102300054859-...`).
+4. Under "Authorized redirect URIs", click "+ ADD URI" and add:
+   - `http://localhost:5173/api/auth/oauth2callback` (Local development)
+   - `https://your-app.vercel.app/api/auth/oauth2callback` (Production cloud domain)
+   - `https://your-preview-url.vercel.app/api/auth/oauth2callback` (If testing on specific preview branch)
+5. Under "Authorized JavaScript origins", add:
+   - `http://localhost:5173`
+   - `https://your-app.vercel.app`
+6. Click "SAVE". Note: Google OAuth strictly forbids wildcard domains (*.vercel.app).
+
 STEP 3: CONFIGURE FIRESTORE DATABASE
 1. In Firebase Console, go to "Firestore Database" -> "Create database".
 2. Choose a region closest to your primary audience (e.g., `australia-southeast1`).
