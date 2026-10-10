@@ -38,7 +38,26 @@ export default async function handler(req, res) {
 
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:5173';
   const proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https');
-  const redirectUri = `${proto}://${host}/api/auth/oauth2callback`;
+  
+  let redirectUri;
+  if (process.env.GOOGLE_REDIRECT_URI) {
+    redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  } else if (host.includes('localhost')) {
+    redirectUri = `http://localhost:5173/api/auth/oauth2callback`;
+  } else if (host.includes('.vercel.app')) {
+    redirectUri = `https://g-class-builder.vercel.app/api/auth/oauth2callback`;
+  } else {
+    redirectUri = `${proto}://${host}/api/auth/oauth2callback`;
+  }
+
+  // Parse originating return URL from state if proxied from preview
+  let returnOrigin = '';
+  if (req.query?.state) {
+    try {
+      const decodedState = JSON.parse(Buffer.from(req.query.state, 'base64').toString('utf8'));
+      returnOrigin = decodedState.returnTo || '';
+    } catch (e) {}
+  }
 
   try {
     // 1. Exchange code for Google OAuth tokens
@@ -93,7 +112,8 @@ export default async function handler(req, res) {
     // 3. Serialize user session into secure cookie
     const sessionCookie = Buffer.from(JSON.stringify(userSession)).toString('base64');
     res.setHeader('Set-Cookie', `gcb_session=${sessionCookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`);
-    res.writeHead(302, { Location: '/?auth_success=1' });
+    const targetRedirect = returnOrigin ? `${returnOrigin}/?auth_success=1` : '/?auth_success=1';
+    res.writeHead(302, { Location: targetRedirect });
     res.end();
   } catch (err) {
     console.error('[OAuth Callback Exception]:', err);

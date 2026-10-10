@@ -561,7 +561,11 @@ export default function App() {
       }
     } catch (err) {
       console.warn("[Firebase Google Auth error, attempting fallback]:", err);
-      if (err.code !== 'auth/popup-closed-by-user') {
+      if (err.code === 'auth/unauthorized-domain') {
+        showToast("Domain not authorized: add this URL to Firebase Console -> Authentication -> Settings -> Authorized Domains.", "error");
+      } else if (err.code === 'auth/invalid-api-key') {
+        showToast("Firebase Web API Key is missing or invalid. Please check Vercel / .env settings.", "error");
+      } else if (err.code !== 'auth/popup-closed-by-user') {
         window.location.href = '/api/auth/google_login';
       }
     } finally {

@@ -29,9 +29,9 @@ export const isFirebaseConfigured = Boolean(
 // Fallback configuration to prevent bundle breakage during build or unconfigured states
 const effectiveConfig = isFirebaseConfigured ? firebaseConfig : {
   apiKey: "AIzaSyPlaceholderKeyForBuildSafety000000",
-  authDomain: "app.firebaseapp.com",
-  projectId: "course-builder-app",
-  storageBucket: "course-builder-app.appspot.com",
+  authDomain: "ai-foundation-firebase.firebaseapp.com",
+  projectId: "ai-foundation-firebase",
+  storageBucket: "ai-foundation-firebase.firebasestorage.app",
   messagingSenderId: "123456789012",
   appId: "1:123456789012:web:abcdef123456"
 };

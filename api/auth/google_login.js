@@ -24,7 +24,18 @@ export default async function handler(req, res) {
   
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:5173';
   const proto = req.headers['x-forwarded-proto'] || (host.includes('localhost') ? 'http' : 'https');
-  const redirectUri = `${proto}://${host}/api/auth/oauth2callback`;
+  
+  // Canonical redirect URI prevents Error 400: redirect_uri_mismatch on ephemeral preview URLs
+  let redirectUri;
+  if (process.env.GOOGLE_REDIRECT_URI) {
+    redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  } else if (host.includes('localhost')) {
+    redirectUri = `http://localhost:5173/api/auth/oauth2callback`;
+  } else if (host.includes('.vercel.app')) {
+    redirectUri = `https://g-class-builder.vercel.app/api/auth/oauth2callback`;
+  } else {
+    redirectUri = `${proto}://${host}/api/auth/oauth2callback`;
+  }
 
   const scopes = [
     'https://www.googleapis.com/auth/classroom.courses',
@@ -38,6 +49,9 @@ export default async function handler(req, res) {
     'https://www.googleapis.com/auth/userinfo.profile'
   ].join(' ');
 
+  // Pass originating host in state so callback redirects user back to their active preview deployment
+  const statePayload = Buffer.from(JSON.stringify({ returnTo: `${proto}://${host}` })).toString('base64');
+
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authUrl.searchParams.set('client_id', clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
@@ -45,6 +59,7 @@ export default async function handler(req, res) {
   authUrl.searchParams.set('scope', scopes);
   authUrl.searchParams.set('access_type', 'offline');
   authUrl.searchParams.set('prompt', 'select_account consent');
+  authUrl.searchParams.set('state', statePayload);
 
   res.writeHead(302, { Location: authUrl.toString() });
   res.end();
