@@ -1714,8 +1714,13 @@ def list_courses_and_status_check(service: Any, verbose: bool = True) -> List[Di
         print(f"[ACTION 4] Google Classroom Status Check & Course Roster")
         print(f"=======================================================")
 
-    courses_resp = service.courses().list(courseStates=["ACTIVE"]).execute()
-    courses = courses_resp.get("courses", [])
+    try:
+        courses_resp = service.courses().list(courseStates=["ACTIVE"]).execute()
+        courses = courses_resp.get("courses", [])
+    except Exception as e:
+        if verbose:
+            print(f"[WARN] Could not retrieve courses from Google Classroom: {e}")
+        return []
 
     results = []
 

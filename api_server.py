@@ -798,20 +798,22 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
 
 
 def run_api_server(port: int = 8000):
-    service = get_global_service()
-    existing = list_courses_and_status_check(service, verbose=False)
-    if not existing:
-        seed_path = "course_curriculum.xlsx"
-        if not os.path.exists(seed_path):
-            generate_sample_course_template(seed_path)
-        create_and_populate_course(service, seed_path, verbose=False)
-        print("[INIT] Seeded initial sample course in Google Classroom engine.")
-
     server_address = ("127.0.0.1", port)
     httpd = HTTPServer(server_address, CourseBuilderAPIHandler)
     print(f"[API SERVER] Running Course Builder REST API at http://localhost:{port}/")
-    import webbrowser
-    webbrowser.open("http://localhost:5173/")
+
+    try:
+        service = get_global_service()
+        existing = list_courses_and_status_check(service, verbose=False)
+        if not existing:
+            seed_path = "course_curriculum.xlsx"
+            if not os.path.exists(seed_path):
+                generate_sample_course_template(seed_path)
+            create_and_populate_course(service, seed_path, verbose=False)
+            print("[INIT] Seeded initial sample course in Google Classroom engine.")
+    except Exception as e:
+        print(f"[INIT NOTICE] Google Classroom sync deferred ({e}).")
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
