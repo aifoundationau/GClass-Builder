@@ -9,9 +9,13 @@ import os
 import sys
 import json
 import urllib.parse
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+import socket
 import tempfile
+import threading
+import time
 import traceback
+import uuid
 from datetime import datetime, timezone
 
 # Ensure UTF-8 printing
@@ -28,6 +32,10 @@ from classroom_course_engine import (
     audit_codebase_safety,
     parse_course_spreadsheet,
     generate_sample_course_template,
+    _http_message,
+    attachment_summary,
+    course_join_link,
+    write_course_workbook,
     CREDENTIALS_FILE,
     TOKEN_FILE,
     SERVICE_ACCOUNT_FILE,
@@ -42,90 +50,83 @@ except ImportError:
     pass
 
 import stripe_lms_service
+import agent_routes
+import teacher_auth
 
 IS_VERCEL = bool(os.environ.get("VERCEL"))
-USER_SESSION_FILE = "/tmp/user_session.json" if IS_VERCEL else "user_session.json"
-GLOBAL_SERVICE = None
-OAUTH_FLOW_CACHE = {}
+
+# Course creation makes one Classroom call per topic, material, assignment and roster entry,
+# which can take minutes. It runs in a background thread; the browser polls for progress.
+CREATE_JOBS = {}
+CREATE_JOBS_LOCK = threading.Lock()
+CREATE_JOB_TTL_SECONDS = 3600
 
 
-def get_current_user_session() -> dict:
-    session_file = "/tmp/user_session.json" if IS_VERCEL else USER_SESSION_FILE
-    if os.path.exists(session_file):
-        try:
-            with open(session_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if data and data.get("authenticated"):
-                    return data
-        except Exception:
-            pass
+def _due_text(item: dict) -> str:
+    """A post's due date and time as Classroom stores them (UTC), in ISO 8601."""
+    d, t = item.get("dueDate"), item.get("dueTime") or {}
+    if not d:
+        return ""
+    return f"{d['year']:04d}-{d['month']:02d}-{d['day']:02d}T{t.get('hours', 0):02d}:{t.get('minutes', 0):02d}Z"
 
-    # If user_session.json missing, attempt auto-restore from existing token.json candidates
-    token_candidates = [
-        "/tmp/token.json",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "token.json"),
-        "token.json"
-    ]
-    for token_path in token_candidates:
-        if os.path.exists(token_path):
-            try:
-                creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-                if creds:
-                    if not creds.valid and creds.refresh_token:
-                        creds.refresh(Request())
-                        try:
-                            with open(token_path, "w", encoding="utf-8") as token_out:
-                                token_out.write(creds.to_json())
-                        except Exception:
-                            pass
 
-                    if creds.valid:
-                        oauth2_service = build('oauth2', 'v2', credentials=creds)
-                        user_info = oauth2_service.userinfo().get().execute()
-                        email = user_info.get("email", "")
-                        name = user_info.get("name", "")
-                        user_session = {
-                            "authenticated": True,
-                            "email": email,
-                            "name": name,
-                            "role": "Google Classroom Instructor / Teacher",
-                            "avatar": user_info.get("picture", f"https://api.dicebear.com/7.x/initials/svg?seed={email}&backgroundColor=4285f4"),
-                            "domain": email.split("@")[1] if "@" in email else "",
-                            "login_time": datetime.now(timezone.utc).isoformat()
-                        }
-                        save_user_session(user_session)
-                        print(f"[AUTH] Auto-restored active session from {token_path} for {email}")
-                        return user_session
-            except Exception as e:
-                print(f"[AUTH WARN] Auto-restore session from {token_path} failed: {e}")
-
+def _creation_summary(result: dict) -> dict:
+    """What the browser shows when the build finishes, and what goes in the completion workbook."""
     return {
-        "authenticated": False,
-        "email": None,
-        "name": None,
-        "role": None
+        "success": True,
+        "course": result["course"],
+        "topicsCount": len(result["topics"]),
+        "materialsCount": len(result["materials"]),
+        "courseworkCount": len(result["coursework"]),
+        "teachersCount": len(result.get("teachers", [])),
+        "invitationsCount": len(result.get("invitations", [])),
+        "failedSteps": [e for e in result.get("log", []) if e["status"] == "failed"],
+        "provisioningLog": result.get("log", []),
+        # Students join with the class code or the join link; Course Builder does not add them.
+        "enrollmentCode": result["course"].get("enrollmentCode"),
+        "joinLink": course_join_link(result["course"]),
+        "posts": [{
+            "week": p["week"], "topic": p["topic"], "kind": p["kind"],
+            "title": p["item"].get("title", ""), "state": p["item"].get("state", ""),
+            "link": p["item"].get("alternateLink", ""), "maxPoints": p["item"].get("maxPoints"),
+            "due": _due_text(p["item"]), "description": p["item"].get("description", ""),
+            "attachments": [attachment_summary(m) for m in p["item"].get("materials", [])],
+        } for p in result.get("posts", [])],
+        "forms": [{k: f.get(k) for k in ("week", "quiz", "questions", "responderUri", "editUri", "published", "problem")}
+                  for f in result.get("forms", [])],
+        "rubrics": [{k: r.get(k) for k in ("week", "assignment", "url", "status", "problem")}
+                    for r in result.get("rubrics", [])],
+        "announcement": (result.get("announcement") or {}).get("text", ""),
     }
 
 
-def save_user_session(user_data: dict):
-    target_file = "/tmp/user_session.json" if IS_VERCEL else USER_SESSION_FILE
-    try:
-        with open(target_file, "w", encoding="utf-8") as f:
-            json.dump(user_data, f, indent=2)
-    except Exception as e:
-        print(f"[AUTH WARN] Could not write session to {target_file}: {e}")
+def start_create_job(service, owner: str, workbook_path: str, forms_service=None) -> str:
+    """Runs create_and_populate_course in a thread and returns the job ID to poll."""
+    job_id = uuid.uuid4().hex
+    job = {"owner": owner, "status": "running", "log": [], "result": None, "error": None,
+           "started": time.time()}
+    with CREATE_JOBS_LOCK:
+        cutoff = time.time() - CREATE_JOB_TTL_SECONDS
+        for old_id in [j for j, v in CREATE_JOBS.items() if v["started"] < cutoff]:
+            CREATE_JOBS.pop(old_id, None)
+        CREATE_JOBS[job_id] = job
 
+    def run():
+        try:
+            result = create_and_populate_course(service, workbook_path, verbose=True, log=job["log"],
+                                                forms_service=forms_service)
+            job["result"] = _creation_summary(result)
+            job["status"] = "done"
+        except Exception as exc:
+            traceback.print_exc()
+            job["error"] = _http_message(exc)
+            job["status"] = "error"
+        finally:
+            if os.path.exists(workbook_path):
+                os.remove(workbook_path)
 
-def get_global_service():
-    global GLOBAL_SERVICE
-    if GLOBAL_SERVICE is None:
-        has_creds = (
-            os.path.exists(CREDENTIALS_FILE) or
-            os.path.exists(TOKEN_FILE) or
-            os.path.exists(SERVICE_ACCOUNT_FILE)
-        )
-        GLOBAL_SERVICE = get_classroom_service(use_mock=not has_creds, verbose=True)
-    return GLOBAL_SERVICE
+    threading.Thread(target=run, name=f"create-course-{job_id[:8]}", daemon=True).start()
+    return job_id
 
 
 class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
@@ -169,11 +170,11 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         return path
 
     def do_GET(self):
-        global OAUTH_FLOW_CACHE
-        global GLOBAL_SERVICE
-        
         path = self._resolve_request_path()
         parsed = urllib.parse.urlparse(self.path)
+
+        if agent_routes.handle_get(self, path):
+            return
 
         if path in ("/", "", "/index.html"):
             dist_index = os.path.join(os.path.dirname(__file__), "dist", "index.html")
@@ -211,23 +212,6 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(content)
                 return
 
-        elif path == "/api/status":
-            is_safe, violations = audit_codebase_safety()
-            has_creds = os.path.exists(CREDENTIALS_FILE) or os.path.exists(TOKEN_FILE)
-            user = get_current_user_session()
-            self._send_json(200, {
-                "status": "online",
-                "mode": "Live Google Classroom API" if has_creds else "In-Memory Classroom Simulator",
-                "no_delete_policy_enforced": is_safe,
-                "violations": violations,
-                "credentials_present": has_creds,
-                "user": user
-            })
-
-        elif path == "/api/auth/me":
-            user = get_current_user_session()
-            self._send_json(200, user)
-
         elif path == "/api/stripe/config":
             self._send_json(200, stripe_lms_service.get_stripe_config())
 
@@ -244,143 +228,28 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
             users = stripe_lms_service.load_all_lms_users()
             self._send_json(200, {"users": users, "tag": "lms", "count": len(users)})
 
-        elif path == "/api/auth/google_login":
-            try:
-                if not os.path.exists(CREDENTIALS_FILE):
-                    print(f"[AUTH ERROR] Missing credentials file: {CREDENTIALS_FILE}")
-                    self.send_response(302)
-                    self._send_cors_headers()
-                    self.send_header("Location", f"/?login_error={urllib.parse.quote('credentials.json file not found')}")
-                    self.end_headers()
-                    return
-                
-                flow = Flow.from_client_secrets_file(
-                    CREDENTIALS_FILE,
-                    scopes=SCOPES,
-                    redirect_uri="http://localhost:5173/api/auth/oauth2callback"
-                )
-                auth_url, state = flow.authorization_url(prompt='select_account consent', access_type='offline')
-                
-                OAUTH_FLOW_CACHE = {
-                    "state": state,
-                    "code_verifier": getattr(flow, "code_verifier", None)
-                }
-                
-                self.send_response(302)
-                self._send_cors_headers()
-                self.send_header("Location", auth_url)
-                self.end_headers()
-            except Exception as e:
-                print(f"[AUTH ERROR] google_login initialization failed: {e}")
-                self.send_response(302)
-                self._send_cors_headers()
-                self.send_header("Location", f"/?login_error={urllib.parse.quote(str(e))}")
-                self.end_headers()
-
-        elif path == "/api/auth/oauth2callback":
-            query = urllib.parse.parse_qs(parsed.query)
-            code = query.get("code", [""])[0]
-            error_param = query.get("error", [""])[0]
-
-            if error_param:
-                print(f"[AUTH] OAuth cancelled or denied by user: {error_param}")
-                self.send_response(302)
-                self._send_cors_headers()
-                self.send_header("Location", f"/?login_error={urllib.parse.quote('Sign-in cancelled or permission denied.')}")
-                self.end_headers()
-                return
-
-            if not code:
-                self.send_response(302)
-                self._send_cors_headers()
-                self.send_header("Location", f"/?login_error={urllib.parse.quote('No authorization code received.')}")
-                self.end_headers()
-                return
-            
-            try:
-                flow = Flow.from_client_secrets_file(
-                    CREDENTIALS_FILE,
-                    scopes=SCOPES,
-                    redirect_uri="http://localhost:5173/api/auth/oauth2callback"
-                )
-                
-                if OAUTH_FLOW_CACHE and OAUTH_FLOW_CACHE.get("code_verifier"):
-                    flow.code_verifier = OAUTH_FLOW_CACHE["code_verifier"]
-                    
-                flow.fetch_token(code=code)
-                creds = flow.credentials
-                
-                # Save token
-                with open(TOKEN_FILE, "w", encoding="utf-8") as token_out:
-                    token_out.write(creds.to_json())
-                
-                # Fetch user info
-                oauth2_service = build('oauth2', 'v2', credentials=creds)
-                user_info = oauth2_service.userinfo().get().execute()
-                email = user_info.get("email", "")
-                name = user_info.get("name", "")
-                
-                user_session = {
-                    "authenticated": True,
-                    "email": email,
-                    "name": name,
-                    "role": "Google Classroom Instructor / Teacher",
-                    "avatar": user_info.get("picture", f"https://api.dicebear.com/7.x/initials/svg?seed={email}&backgroundColor=4285f4"),
-                    "domain": email.split("@")[1] if "@" in email else "",
-                    "login_time": datetime.now(timezone.utc).isoformat()
-                }
-                save_user_session(user_session)
-                
-                # Re-initialize global service with new creds
-                GLOBAL_SERVICE = None 
-                
-                self.send_response(302)
-                self._send_cors_headers()
-                self.send_header("Location", "/?auth_success=1")
-                self.end_headers()
-            except Exception as e:
-                print(f"[AUTH WARN] OAuth exchange error: {e}")
-                # Resilient fallback: If code was already redeemed / expired, but token.json exists and is valid,
-                # seamlessly restore the active session and redirect cleanly to /
-                if os.path.exists(TOKEN_FILE):
-                    try:
-                        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
-                        if creds and creds.valid:
-                            oauth2_service = build('oauth2', 'v2', credentials=creds)
-                            user_info = oauth2_service.userinfo().get().execute()
-                            email = user_info.get("email", "")
-                            user_session = {
-                                "authenticated": True,
-                                "email": email,
-                                "name": user_info.get("name", ""),
-                                "role": "Google Classroom Instructor / Teacher",
-                                "avatar": user_info.get("picture", f"https://api.dicebear.com/7.x/initials/svg?seed={email}&backgroundColor=4285f4"),
-                                "domain": email.split("@")[1] if "@" in email else "",
-                                "login_time": datetime.now(timezone.utc).isoformat()
-                            }
-                            save_user_session(user_session)
-                            print(f"[AUTH] Seamlessly recovered session for {email}")
-                            self.send_response(302)
-                            self._send_cors_headers()
-                            self.send_header("Location", "/")
-                            self.end_headers()
-                            return
-                    except Exception as sub_e:
-                        print(f"[AUTH WARN] Fallback token restore failed: {sub_e}")
-
-                # Redirect to home with a clear toast notification instead of browser 500 error screen
-                self.send_response(302)
-                self._send_cors_headers()
-                self.send_header("Location", f"/?login_error={urllib.parse.quote('Authorization expired or code was already used. Please click login again.')}")
-                self.end_headers()
-
         elif path == "/api/courses":
             try:
-                service = get_global_service()
+                service = agent_routes._teacher_service(self)
                 courses = list_courses_and_status_check(service, verbose=False)
                 self._send_json(200, {"courses": courses})
+            except PermissionError as e:
+                self._send_json(401, {"error": str(e)})
             except Exception as e:
                 self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+
+        elif path == "/api/courses/create/status":
+            job_id = urllib.parse.parse_qs(parsed.query).get("job", [""])[0]
+            job = CREATE_JOBS.get(job_id)
+            if not job or job["owner"] != agent_routes._current_email(self):
+                self._send_json(404, {"error": "No course creation in progress with that ID."})
+                return
+            self._send_json(200, {
+                "status": job["status"],
+                "log": list(job["log"]),
+                "result": job["result"],
+                "error": job["error"],
+            })
 
         elif path == "/api/test":
             try:
@@ -433,50 +302,8 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
 
         # 1. Login with Google Classroom Email
-        if path == "/api/auth/login":
-            try:
-                body = self._read_json_body()
-                email = str(body.get("email", "")).strip().lower()
-                name = str(body.get("name", "")).strip()
-
-                if not email or "@" not in email:
-                    self._send_json(400, {"error": "A valid Google Classroom email address is required."})
-                    return
-
-                # Extract display name if omitted
-                if not name:
-                    prefix = email.split("@")[0].replace(".", " ").title()
-                    name = f"Prof. {prefix}"
-
-                user_session = {
-                    "authenticated": True,
-                    "email": email,
-                    "name": name,
-                    "role": "Google Classroom Instructor / Teacher",
-                    "avatar": f"https://api.dicebear.com/7.x/initials/svg?seed={email}&backgroundColor=4285f4",
-                    "domain": email.split("@")[1],
-                    "login_time": datetime.now(timezone.utc).isoformat()
-                }
-                save_user_session(user_session)
-                print(f"[AUTH] User signed in with Google Classroom email: {email}")
-                self._send_json(200, {"success": True, "user": user_session})
-            except Exception as e:
-                self._send_json(500, {"error": str(e)})
-
-        # 2. Logout
-        elif path == "/api/auth/logout":
-            try:
-                for f_path in [USER_SESSION_FILE, TOKEN_FILE, "/tmp/user_session.json", "/tmp/token.json", "user_session.json", "token.json"]:
-                    if os.path.exists(f_path):
-                        try:
-                            os.remove(f_path)
-                        except Exception:
-                            pass
-                GLOBAL_SERVICE = None
-                print("[AUTH] User signed out and credentials cleared.")
-                self._send_json(200, {"success": True, "authenticated": False})
-            except Exception as e:
-                self._send_json(500, {"error": str(e)})
+        if agent_routes.handle_post(self, path):
+            return
 
         # 3. Create Course
         elif path == "/api/courses/create":
@@ -490,72 +317,20 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                     self._send_json(400, {"error": "Missing settings or curriculum in request body"})
                     return
 
-                # Write temporary Excel spreadsheet
+                # Write the course to a temporary workbook, the way the engine reads it
                 with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
                     tmp_path = tmp.name
+                write_course_workbook(settings, curriculum, students, tmp_path)
 
-                import pandas as pd
-                with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
-                    settings_rows = []
-                    for k, v in settings.items():
-                        if k == "teachers" and isinstance(v, list):
-                            settings_rows.append({"Setting": k, "Value": ", ".join(v)})
-                        else:
-                            settings_rows.append({"Setting": k, "Value": v})
-                    df_set = pd.DataFrame(settings_rows)
-                    df_set.to_excel(writer, sheet_name="Course_Settings", index=False)
-
-                    presentation_links = []
-                    for c in curriculum:
-                        p_urls = c.get("presentation_urls") or []
-                        if isinstance(p_urls, list) and len(p_urls) > 0:
-                            clean_links = "\n".join([str(u).strip() for u in p_urls if u and str(u).strip()])
-                        else:
-                            clean_links = str(c.get("presentation_url", "")).strip()
-                        presentation_links.append(clean_links)
-
-                    df_curr = pd.DataFrame([
-                        {
-                            "Week": c.get("sequence", f"Week {i+1}"),
-                            "Classroom Stream Topic": c.get("stream_topic") or f"{c.get('sequence', f'Week {i+1}')}: {c.get('title', f'Module {i+1}')}",
-                            "Module Title": c.get("title", ""),
-                            "Module Overview / Description": c.get("overview", ""),
-                            "Lecture Presentation URL (Google Slides / Web Document)": presentation_links[i],
-                            "Assessment / Knowledge Check": c.get("assignment_title") or c.get("assessment", ""),
-                            "Assignment Instructions": c.get("assignment_instructions", ""),
-                            "Quiz assignment": c.get("quiz_title", ""),
-                            "Quiz URL": c.get("quiz_url", ""),
-                            "Question": c.get("question_prompt", ""),
-                            "Question Type": c.get("question_type", "SHORT_ANSWER_QUESTION"),
-                            "Points": c.get("points", 100),
-                            "Due Date": c.get("due_date", "")
-                        }
-                        for i, c in enumerate(curriculum)
-                    ])
-                    df_curr.to_excel(writer, sheet_name="Curriculum", index=False)
-
-                    if students:
-                        df_students = pd.DataFrame([
-                            {"Student Email": s if isinstance(s, str) else s.get("email", "")}
-                            for s in students
-                        ])
-                        df_students.to_excel(writer, sheet_name="Students", index=False)
-
-                service = get_global_service()
-                result = create_and_populate_course(service, tmp_path, verbose=True)
-
-                if os.path.exists(tmp_path):
+                try:
+                    service = agent_routes._teacher_service(self)
+                    forms_service = teacher_auth.build_teacher_forms_service(agent_routes._current_email(self))
+                except PermissionError as e:
                     os.remove(tmp_path)
-
-                self._send_json(200, {
-                    "success": True,
-                    "course": result["course"],
-                    "topicsCount": len(result["topics"]),
-                    "materialsCount": len(result["materials"]),
-                    "courseworkCount": len(result["coursework"]),
-                    "teachersCount": len(result.get("teachers", [])),
-                    "studentsCount": len(result.get("students", []))
-                })
+                    self._send_json(401, {"error": str(e)})
+                    return
+                job_id = start_create_job(service, agent_routes._current_email(self), tmp_path, forms_service)
+                self._send_json(202, {"jobId": job_id})
             except Exception as e:
                 self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
 
@@ -572,59 +347,14 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                     self._send_json(400, {"error": "Missing course_id"})
                     return
 
-                # Write temporary spreadsheet
+                # Write the course to a temporary workbook, the way the engine reads it
                 with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
                     tmp_path = tmp.name
+                write_course_workbook(settings, curriculum, students, tmp_path)
 
-                import pandas as pd
-                with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
-                    settings_rows = []
-                    for k, v in settings.items():
-                        if k == "teachers" and isinstance(v, list):
-                            settings_rows.append({"Setting": k, "Value": ", ".join(v)})
-                        else:
-                            settings_rows.append({"Setting": k, "Value": v})
-                    df_set = pd.DataFrame(settings_rows)
-                    df_set.to_excel(writer, sheet_name="Course_Settings", index=False)
-
-                    presentation_links = []
-                    for c in curriculum:
-                        p_urls = c.get("presentation_urls") or []
-                        if isinstance(p_urls, list) and len(p_urls) > 0:
-                            clean_links = "\n".join([str(u).strip() for u in p_urls if u and str(u).strip()])
-                        else:
-                            clean_links = str(c.get("presentation_url", "")).strip()
-                        presentation_links.append(clean_links)
-
-                    df_curr = pd.DataFrame([
-                        {
-                            "Week": c.get("sequence", f"Week {i+1}"),
-                            "Classroom Stream Topic": c.get("stream_topic") or f"{c.get('sequence', f'Week {i+1}')}: {c.get('title', f'Module {i+1}')}",
-                            "Module Title": c.get("title", ""),
-                            "Module Overview / Description": c.get("overview", ""),
-                            "Lecture Presentation URL (Google Slides / Web Document)": presentation_links[i],
-                            "Assessment / Knowledge Check": c.get("assignment_title") or c.get("assessment", ""),
-                            "Assignment Instructions": c.get("assignment_instructions", ""),
-                            "Quiz assignment": c.get("quiz_title", ""),
-                            "Quiz URL": c.get("quiz_url", ""),
-                            "Question": c.get("question_prompt", ""),
-                            "Question Type": c.get("question_type", "SHORT_ANSWER_QUESTION"),
-                            "Points": c.get("points", 100),
-                            "Due Date": c.get("due_date", "")
-                        }
-                        for i, c in enumerate(curriculum)
-                    ])
-                    df_curr.to_excel(writer, sheet_name="Curriculum", index=False)
-
-                    if students:
-                        df_students = pd.DataFrame([
-                            {"Student Email": s if isinstance(s, str) else s.get("email", "")}
-                            for s in students
-                        ])
-                        df_students.to_excel(writer, sheet_name="Students", index=False)
-
-                service = get_global_service()
-                result = sync_existing_course(service, course_id, tmp_path, verbose=True)
+                service = agent_routes._teacher_service(self)
+                forms_service = teacher_auth.build_teacher_forms_service(agent_routes._current_email(self))
+                result = sync_existing_course(service, course_id, tmp_path, verbose=True, forms_service=forms_service)
 
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
@@ -797,22 +527,29 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": f"Path not found: {path}"})
 
 
+class ExclusivePortServer(ThreadingHTTPServer):
+    # HTTPServer turns on address reuse. On Windows that lets a second server bind the same
+    # port, and requests then land on either one, including a stale server running old code.
+    # Refuse instead, so a second start fails loudly.
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self):
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def run_api_server(port: int = 8000):
     server_address = ("127.0.0.1", port)
-    httpd = HTTPServer(server_address, CourseBuilderAPIHandler)
-    print(f"[API SERVER] Running Course Builder REST API at http://localhost:{port}/")
-
+    # Threaded so one slow Google call cannot hold up every other request
     try:
-        service = get_global_service()
-        existing = list_courses_and_status_check(service, verbose=False)
-        if not existing:
-            seed_path = "course_curriculum.xlsx"
-            if not os.path.exists(seed_path):
-                generate_sample_course_template(seed_path)
-            create_and_populate_course(service, seed_path, verbose=False)
-            print("[INIT] Seeded initial sample course in Google Classroom engine.")
-    except Exception as e:
-        print(f"[INIT NOTICE] Google Classroom sync deferred ({e}).")
+        httpd = ExclusivePortServer(server_address, CourseBuilderAPIHandler)
+    except OSError as exc:
+        print(f"[API SERVER] Port {port} is already in use by another program ({exc}). "
+              f"Another Course Builder server is probably still running. Stop it, then start again.")
+        sys.exit(1)
+    httpd.daemon_threads = True
+    print(f"[API SERVER] Running Course Builder REST API at http://localhost:{port}/")
 
     try:
         httpd.serve_forever()

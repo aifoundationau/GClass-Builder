@@ -43,6 +43,23 @@ import {
   Bot
 } from 'lucide-react';
 import RegistrationModal from './components/RegistrationModal';
+import ClassroomEnvironment from './components/ClassroomEnvironment';
+import DeployProgress from './components/DeployProgress';
+import QuizQuestionsEditor from './components/QuizQuestionsEditor';
+import {
+  BLANK_SETTINGS, NOTEBOOK_HOSTS_TEXT, TEMPLATE_EXAMPLE, blankModule, buildCourseWorkbook, buildDeployedWorkbook,
+  importCourseWorkbook, isIsoDue, isNotebookUrl, isSheetLink, nonEmptyChoices, quizQuestionProblems, quizTotalPoints,
+  splitDue,
+} from './lib/courseWorkbook';
+
+const YOUTUBE_ID = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
+const youtubeId = (url) => (String(url || '').match(YOUTUBE_ID) || [])[1] || null;
+
+// Everything attached to a topic's lecture-materials post: notebook, links and videos.
+const topicAttachmentCount = (mod) =>
+  ((mod.presentation_urls && mod.presentation_urls.filter(Boolean).length) || (mod.presentation_url ? 1 : 0))
+  + (mod.youtube_urls || []).filter(Boolean).length
+  + (mod.notebook_enabled && mod.notebook_url ? 1 : 0);
 import { 
   signInWithGoogle, 
   logOutUser, 
@@ -209,6 +226,13 @@ const SAMPLE_PRESETS = {
     ]
   }
 };
+
+// Made-up teacher and student addresses used by the samples above
+const SAMPLE_EMAILS = new Set(
+  Object.values(SAMPLE_PRESETS)
+    .flatMap(p => [...((p.settings && p.settings.teachers) || []), ...(p.students || [])])
+    .map(e => String(e).toLowerCase())
+);
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -426,7 +450,6 @@ export default function App() {
   // Real-time backend states
   const [backendStatus, setBackendStatus] = useState({
     online: false,
-    mode: "Connecting to Classroom Engine...",
     no_delete_policy_enforced: true,
   });
 
@@ -435,6 +458,7 @@ export default function App() {
   const [selectedCourseForSync, setSelectedCourseForSync] = useState("");
   const [syncLogs, setSyncLogs] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [deployProgress, setDeployProgress] = useState(null);
 
   const showToast = (msg) => {
     setToastMessage(msg);
@@ -466,7 +490,6 @@ export default function App() {
         const statusData = await statusRes.json();
         setBackendStatus({
           online: true,
-          mode: statusData.mode,
           no_delete_policy_enforced: statusData.no_delete_policy_enforced
         });
       }
@@ -529,7 +552,6 @@ export default function App() {
     }
 
     checkAuthAndFetchData();
-    fetchLmsMembers();
     const interval = setInterval(checkAuthAndFetchData, 15000);
 
     return () => {
@@ -586,508 +608,61 @@ export default function App() {
     showToast("Signed out of Google session.");
   };
 
-  const handleLoadPreset = (key) => {
-    if (SAMPLE_PRESETS[key]) {
-      setSettings(SAMPLE_PRESETS[key].settings);
-      setCurriculum(SAMPLE_PRESETS[key].curriculum);
-      if (SAMPLE_PRESETS[key].students) {
-        setStudents(SAMPLE_PRESETS[key].students);
-      }
-      setCurrentModuleIndex(0);
-      showToast(`Loaded ${SAMPLE_PRESETS[key].settings.class_name} preset!`);
-    }
-  };
+  // The Course Builder workbook. Template, Save .xlsx and Upload share one definition
+  // (src/lib/courseWorkbook.js), so every field is written to a column and read back from it.
 
-  // 1. Download Blank / Starter Course Template (.xlsx) with clean formatting & instructions
+  // 1. Download the starter template: an example course that fills every field once
   const handleDownloadTemplate = () => {
-    const wb = XLSX.utils.book_new();
-
-    // Sheet 1: Course_Settings
-    const settingsData = [
-      {
-        "Setting": "class_name",
-        "Value": "CS101: Introduction to Cloud Computing",
-        "Description": "Course Title displayed in Google Classroom (Required)"
-      },
-      {
-        "Setting": "section",
-        "Value": "Cohort 1 - Fall 2026",
-        "Description": "Course section or cohort identifier (Optional)"
-      },
-      {
-        "Setting": "subject",
-        "Value": "Computer Science & Cloud Systems",
-        "Description": "Subject area or department (Optional)"
-      },
-      {
-        "Setting": "level",
-        "Value": "Undergraduate (Introductory)",
-        "Description": "Academic level / Target audience (Optional)"
-      },
-      {
-        "Setting": "room",
-        "Value": "Virtual Lab Room A-12",
-        "Description": "Physical classroom or virtual lab meeting link (Optional)"
-      },
-      {
-        "Setting": "welcome_announcement",
-        "Value": "Welcome to CS101! Please review the syllabus, bookmark the lecture slide links, and complete weekly coursework.",
-        "Description": "Welcome announcement posted to Classroom Stream on creation"
-      },
-      {
-        "Setting": "teachers",
-        "Value": "prof.sarah.jenkins@school.edu, ta.alex@school.edu",
-        "Description": "Comma-separated list of co-instructor Google Classroom email addresses to invite"
-      }
-    ];
-    const wsSettings = XLSX.utils.json_to_sheet(settingsData);
-    wsSettings['!cols'] = [
-      { wch: 24 },
-      { wch: 55 },
-      { wch: 65 }
-    ];
-    XLSX.utils.book_append_sheet(wb, wsSettings, "Course_Settings");
-
-    // Sheet 2: Curriculum (All 13 standard columns)
-    const curriculumData = [
-      {
-        "Week": "Week 1",
-        "Classroom Stream Topic": "Week 1: Foundations of Cloud Infrastructure",
-        "Module Title": "Foundations of Cloud Infrastructure",
-        "Module Overview / Description": "Introduction to distributed systems, virtualization, hypervisors, and multi-tenant architectures.",
-        "Lecture Presentation URL (Google Slides / Web Document)": "https://docs.google.com/presentation/d/1demo-cloud-foundations-slides/edit\nhttps://docs.google.com/document/d/1demo-cloud-architecture-whitepaper/edit",
-        "Assessment / Knowledge Check": "Lab 1: Setting up Cloud Shell & IAM",
-        "Assignment Instructions": "Configure your cloud environment, set up service accounts, and verify CLI access.",
-        "Quiz assignment": "Quiz 1: Virtualization vs Containers Architecture",
-        "Quiz URL": "https://docs.google.com/forms/d/1quiz-cloud-foundations/viewform",
-        "Question": "What are the primary performance trade-offs between Type-1 and Type-2 hypervisors?",
-        "Question Type": "SHORT_ANSWER_QUESTION",
-        "Points": 100,
-        "Due Date": "2026-10-15"
-      },
-      {
-        "Week": "Week 2",
-        "Classroom Stream Topic": "Week 2: Compute & Container Orchestration",
-        "Module Title": "Compute & Container Orchestration",
-        "Module Overview / Description": "Deep dive into Docker container runtime and Kubernetes workload management.",
-        "Lecture Presentation URL (Google Slides / Web Document)": "https://docs.google.com/presentation/d/2demo-kubernetes-containers/edit",
-        "Assessment / Knowledge Check": "Lab Assignment: Deploying Microservices on GKE",
-        "Assignment Instructions": "Deploy multi-tier containerized applications to Google Kubernetes Engine.",
-        "Quiz assignment": "Quiz 2: Kubernetes Pods, Services & Ingress",
-        "Quiz URL": "https://docs.google.com/forms/d/2quiz-k8s-orchestration/viewform",
-        "Question": "Explain how a Kubernetes Service discovers and routes traffic to backend Pods.",
-        "Question Type": "SHORT_ANSWER_QUESTION",
-        "Points": 100,
-        "Due Date": "2026-10-22"
-      },
-      {
-        "Week": "Week 3",
-        "Classroom Stream Topic": "Week 3: Cloud Storage & Scalable Databases",
-        "Module Title": "Cloud Storage & Scalable Databases",
-        "Module Overview / Description": "Understanding blob storage, transactional SQL databases, and globally distributed NoSQL.",
-        "Lecture Presentation URL (Google Slides / Web Document)": "https://docs.google.com/presentation/d/3demo-cloud-databases-storage/edit",
-        "Assessment / Knowledge Check": "Assessment 3: Designing a High-Availability Storage Tier",
-        "Assignment Instructions": "Design a fault-tolerant multi-region storage architecture with read replicas.",
-        "Quiz assignment": "Quiz 3: CAP Theorem & Consistency Models",
-        "Quiz URL": "https://docs.google.com/forms/d/3quiz-databases-storage/viewform",
-        "Question": "Under what specific latency and throughput constraints would you select Cloud Spanner over Cloud SQL?",
-        "Question Type": "SHORT_ANSWER_QUESTION",
-        "Points": 100,
-        "Due Date": "2026-10-29"
-      },
-      {
-        "Week": "Week 4",
-        "Classroom Stream Topic": "Week 4: DevOps, Security & Final Capstone",
-        "Module Title": "DevOps, Security & Final Capstone",
-        "Module Overview / Description": "IAM roles, least privilege, CI/CD automation pipelines, and course capstone presentation.",
-        "Lecture Presentation URL (Google Slides / Web Document)": "https://docs.google.com/presentation/d/4demo-devops-security-capstone/edit",
-        "Assessment / Knowledge Check": "Final Capstone Project: End-to-End Automated Pipeline",
-        "Assignment Instructions": "Build and deploy an automated CI/CD pipeline with strict security policy enforcement.",
-        "Quiz assignment": "Quiz 4: Cloud Security & Principle of Least Privilege",
-        "Quiz URL": "https://docs.google.com/forms/d/4quiz-devops-security/viewform",
-        "Question": "Discuss the key considerations when securing secrets in a public cloud pipeline.",
-        "Question Type": "SHORT_ANSWER_QUESTION",
-        "Points": 200,
-        "Due Date": "2026-11-05"
-      }
-    ];
-    const wsCurriculum = XLSX.utils.json_to_sheet(curriculumData);
-    wsCurriculum['!cols'] = [
-      { wch: 12 },
-      { wch: 42 },
-      { wch: 36 },
-      { wch: 50 },
-      { wch: 55 },
-      { wch: 38 },
-      { wch: 48 },
-      { wch: 38 },
-      { wch: 45 },
-      { wch: 45 },
-      { wch: 25 },
-      { wch: 10 },
-      { wch: 14 }
-    ];
-    XLSX.utils.book_append_sheet(wb, wsCurriculum, "Curriculum");
-
-    // Sheet 3: Students
-    const studentsData = [
-      { "Student #": 1, "Student Email": "anna.smith@student.school.edu", "Enrollment Status": "Enrolled / Ready to Invite" },
-      { "Student #": 2, "Student Email": "ben.miller@student.school.edu", "Enrollment Status": "Enrolled / Ready to Invite" },
-      { "Student #": 3, "Student Email": "clara.zhao@student.school.edu", "Enrollment Status": "Enrolled / Ready to Invite" },
-      { "Student #": 4, "Student Email": "david.williams@student.school.edu", "Enrollment Status": "Enrolled / Ready to Invite" },
-      { "Student #": 5, "Student Email": "elena.rostova@student.school.edu", "Enrollment Status": "Enrolled / Ready to Invite" }
-    ];
-    const wsStudents = XLSX.utils.json_to_sheet(studentsData);
-    wsStudents['!cols'] = [
-      { wch: 12 },
-      { wch: 38 },
-      { wch: 28 }
-    ];
-    XLSX.utils.book_append_sheet(wb, wsStudents, "Students");
-
-    // Sheet 4: Readme_Instructions
-    const instructionsData = [
-      { "Sheet": "Course_Settings", "Element": "class_name", "Required": "YES", "Description": "Official course name created in Google Classroom." },
-      { "Sheet": "Course_Settings", "Element": "section", "Required": "NO", "Description": "Cohort or section code (e.g. Cohort 1 - Fall)." },
-      { "Sheet": "Course_Settings", "Element": "subject", "Required": "NO", "Description": "Academic subject classification." },
-      { "Sheet": "Course_Settings", "Element": "level", "Required": "NO", "Description": "Academic level / Target audience." },
-      { "Sheet": "Course_Settings", "Element": "room", "Required": "NO", "Description": "Physical classroom room or virtual meeting link." },
-      { "Sheet": "Course_Settings", "Element": "welcome_announcement", "Required": "NO", "Description": "Introductory welcome announcement posted to Classroom stream." },
-      { "Sheet": "Course_Settings", "Element": "teachers", "Required": "NO", "Description": "Comma-separated list of co-teacher Google Classroom emails to invite." },
-      { "Sheet": "Curriculum", "Element": "Week", "Required": "YES", "Description": "Week sequence label (e.g. Week 1, Week 2, Week 3...)." },
-      { "Sheet": "Curriculum", "Element": "Classroom Stream Topic", "Required": "YES", "Description": "Stream topic created in Google Classroom grouping all materials and coursework." },
-      { "Sheet": "Curriculum", "Element": "Module Title", "Required": "YES", "Description": "Display title of the module." },
-      { "Sheet": "Curriculum", "Element": "Module Overview / Description", "Required": "NO", "Description": "Detailed overview of the weekly topics." },
-      { "Sheet": "Curriculum", "Element": "Lecture Presentation URL (Google Slides / Web Document)", "Required": "NO", "Description": "Google Slides or Web Doc link. To attach multiple links, separate them with a newline (Alt+Enter) or comma." },
-      { "Sheet": "Curriculum", "Element": "Assessment / Knowledge Check", "Required": "NO", "Description": "Title for the weekly assignment coursework." },
-      { "Sheet": "Curriculum", "Element": "Assignment Instructions", "Required": "NO", "Description": "Step-by-step student instructions and rubric for the assignment." },
-      { "Sheet": "Curriculum", "Element": "Quiz assignment", "Required": "NO", "Description": "Title for the weekly quiz assignment." },
-      { "Sheet": "Curriculum", "Element": "Quiz URL", "Required": "NO", "Description": "Direct URL to Google Forms quiz." },
-      { "Sheet": "Curriculum", "Element": "Question", "Required": "NO", "Description": "Discussion question prompt posted for student responses." },
-      { "Sheet": "Curriculum", "Element": "Question Type", "Required": "NO", "Description": "SHORT_ANSWER_QUESTION or MULTIPLE_CHOICE_QUESTION (Default: SHORT_ANSWER_QUESTION)." },
-      { "Sheet": "Curriculum", "Element": "Points", "Required": "NO", "Description": "Total points possible for coursework (Default: 100)." },
-      { "Sheet": "Curriculum", "Element": "Due Date", "Required": "NO", "Description": "Due date formatted as YYYY-MM-DD (e.g. 2026-10-15)." },
-      { "Sheet": "Students", "Element": "Student Email", "Required": "YES", "Description": "Google Classroom email of the student to enroll." },
-      { "Sheet": "Workflow", "Element": "Step 1", "Required": "-", "Description": "Download this workbook template." },
-      { "Sheet": "Workflow", "Element": "Step 2", "Required": "-", "Description": "Fill in Course_Settings, Curriculum, and Students sheets offline." },
-      { "Sheet": "Workflow", "Element": "Step 3", "Required": "-", "Description": "Upload into Google Course Builder. All categories and weeks will automatically populate." },
-      { "Sheet": "Workflow", "Element": "Step 4", "Required": "-", "Description": "Review modules using the drop-down or 'Review All' view, then press 'Finish & Create Course'!" }
-    ];
-    const wsInstructions = XLSX.utils.json_to_sheet(instructionsData);
-    wsInstructions['!cols'] = [
-      { wch: 18 },
-      { wch: 38 },
-      { wch: 12 },
-      { wch: 75 }
-    ];
-    XLSX.utils.book_append_sheet(wb, wsInstructions, "Readme_Instructions");
-
-    XLSX.writeFile(wb, "Google_Classroom_Course_Template.xlsx");
-    showToast("Downloaded starter template 'Google_Classroom_Course_Template.xlsx'!");
+    XLSX.writeFile(buildCourseWorkbook(TEMPLATE_EXAMPLE), "Google_Classroom_Course_Template.xlsx");
+    showToast("Downloaded 'Google_Classroom_Course_Template.xlsx'. Replace the example course with yours, then upload it.");
   };
 
-  // 2. Download / Save Current Excel Spreadsheet (All 4 sheets populated with current UI state)
+  // 2. Save the form as a workbook that uploads back unchanged
   const handleExportExcel = () => {
-    const wb = XLSX.utils.book_new();
-
-    // Sheet 1: Course_Settings (includes co-teachers)
-    const settingsData = [
-      { Setting: "class_name", Value: settings.class_name || "", Description: "Course Title displayed in Google Classroom" },
-      { Setting: "section", Value: settings.section || "", Description: "Course section or cohort identifier" },
-      { Setting: "subject", Value: settings.subject || "", Description: "Subject area or department" },
-      { Setting: "level", Value: settings.level || "", Description: "Academic level / Target audience" },
-      { Setting: "room", Value: settings.room || "", Description: "Physical classroom or virtual lab meeting link" },
-      { Setting: "welcome_announcement", Value: settings.welcome_announcement || "", Description: "Welcome announcement posted to Classroom Stream on creation" },
-      { Setting: "teachers", Value: (settings.teachers || []).join(", "), Description: "Comma-separated list of co-instructor Google Classroom emails" }
-    ];
-    const wsSettings = XLSX.utils.json_to_sheet(settingsData);
-    wsSettings['!cols'] = [{ wch: 24 }, { wch: 55 }, { wch: 65 }];
-    XLSX.utils.book_append_sheet(wb, wsSettings, "Course_Settings");
-
-    // Sheet 2: Curriculum (All 13 standard columns)
-    const currData = curriculum.map((c, idx) => {
-      const pUrls = (c.presentation_urls && c.presentation_urls.filter(Boolean).length > 0)
-        ? c.presentation_urls.filter(Boolean).join("\n")
-        : (c.presentation_url || "");
-
-      return {
-        "Week": c.sequence || `Week ${idx + 1}`,
-        "Classroom Stream Topic": c.stream_topic || `${c.sequence || `Week ${idx + 1}`}: ${c.title || `Module ${idx + 1}`}`,
-        "Module Title": c.title || "",
-        "Module Overview / Description": c.overview || "",
-        "Lecture Presentation URL (Google Slides / Web Document)": pUrls,
-        "Assessment / Knowledge Check": c.assignment_title || "",
-        "Assignment Instructions": c.assignment_instructions || "",
-        "Quiz assignment": c.quiz_title || "",
-        "Quiz URL": c.quiz_url || "",
-        "Question": c.question_prompt || "",
-        "Question Type": c.question_type || "SHORT_ANSWER_QUESTION",
-        "Points": c.points || 100,
-        "Due Date": c.due_date || ""
-      };
-    });
-    const wsCurriculum = XLSX.utils.json_to_sheet(currData);
-    wsCurriculum['!cols'] = [
-      { wch: 12 }, { wch: 42 }, { wch: 36 }, { wch: 50 }, { wch: 55 },
-      { wch: 38 }, { wch: 48 }, { wch: 38 }, { wch: 45 }, { wch: 45 },
-      { wch: 25 }, { wch: 10 }, { wch: 14 }
-    ];
-    XLSX.utils.book_append_sheet(wb, wsCurriculum, "Curriculum");
-
-    // Sheet 3: Students (Roster)
-    const studentsData = students.map((s, idx) => ({
-      "Student #": idx + 1,
-      "Student Email": s,
-      "Enrollment Status": "Enrolled / Ready to Invite"
-    }));
-    const wsStudents = XLSX.utils.json_to_sheet(studentsData);
-    wsStudents['!cols'] = [{ wch: 12 }, { wch: 38 }, { wch: 28 }];
-    XLSX.utils.book_append_sheet(wb, wsStudents, "Students");
-
-    // Sheet 4: Readme_Instructions (Guidance)
-    const instructionsData = [
-      { "Sheet": "Course_Settings", "Element": "class_name", "Description": "Official course name in Google Classroom" },
-      { "Sheet": "Course_Settings", "Element": "teachers", "Description": "Comma-separated co-instructor emails" },
-      { "Sheet": "Curriculum", "Element": "Week", "Description": "Week sequence (e.g. Week 1, Week 2)" },
-      { "Sheet": "Curriculum", "Element": "Classroom Stream Topic", "Description": "Topic heading in Google Classroom" },
-      { "Sheet": "Curriculum", "Element": "Lecture Presentation URL", "Description": "Slides / docs. Multiple links separated by newline or comma" },
-      { "Sheet": "Curriculum", "Element": "Assessment / Knowledge Check", "Description": "Assignment title" },
-      { "Sheet": "Curriculum", "Element": "Quiz assignment", "Description": "Google Forms quiz assignment" },
-      { "Sheet": "Curriculum", "Element": "Question", "Description": "Classroom discussion question" },
-      { "Sheet": "Students", "Element": "Student Email", "Description": "Student email addresses to enroll" }
-    ];
-    const wsInstructions = XLSX.utils.json_to_sheet(instructionsData);
-    wsInstructions['!cols'] = [{ wch: 18 }, { wch: 35 }, { wch: 65 }];
-    XLSX.utils.book_append_sheet(wb, wsInstructions, "Readme_Instructions");
-
     const fileName = `${(settings.class_name || "Course").replace(/[^a-zA-Z0-9]/g, "_")}_Curriculum.xlsx`;
-    XLSX.writeFile(wb, fileName);
-    showToast(`Saved & downloaded "${fileName}" (${curriculum.length} weeks, ${students.length} students)!`);
+    XLSX.writeFile(buildCourseWorkbook({ settings, curriculum, students }), fileName);
+    showToast(`Saved "${fileName}" (${curriculum.length} weeks, ${students.length} students).`);
   };
 
-  // 3. Upload Excel Spreadsheet (Connects to all elements: Settings, Teachers, Students, and Curriculum)
+  // A course read from a workbook replaces everything in the form. Used by Upload .xlsx and by
+  // the AI panels, which hand template workbooks straight here instead of to the AI.
+  const applyImportedCourse = (course, fileName) => {
+    setSettings(course.settings);
+    setStudents(course.students);
+    setCurriculum(course.curriculum);
+    setCurrentModuleIndex(0);
+    setActiveTab('studio');
+    setImportedWorkbookInfo({
+      loaded: true,
+      fileName,
+      courseName: course.settings.class_name,
+      section: course.settings.section,
+      weekCount: course.curriculum.length,
+      teacherCount: course.settings.teachers.length,
+      studentCount: course.students.length,
+      warnings: course.warnings,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    });
+    showToast(course.warnings.length > 0
+      ? `Loaded "${fileName}", with ${course.warnings.length} thing(s) to check. They are listed above the weeks.`
+      : `Loaded "${fileName}": ${course.curriculum.length} weeks and ${course.settings.teachers.length} co-teachers. Review, then press Finish & Create Course.`);
+  };
+
+  // 3. Upload a workbook. It is the whole course, so it replaces everything in the form.
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (evt) => {
       try {
-        const data = new Uint8Array(evt.target.result);
-        const workbook = XLSX.read(data, { type: 'array' });
-
-        const sheetNamesLower = {};
-        workbook.SheetNames.forEach(name => {
-          sheetNamesLower[name.toLowerCase().trim()] = name;
-        });
-
-        // 1. Parse Course_Settings (including co-teachers)
-        const newSettings = { ...settings };
-        let settingsSheetName = null;
-        for (const candidate of ["course_settings", "coursesettings", "settings", "course settings", "course", "metadata"]) {
-          if (sheetNamesLower[candidate]) {
-            settingsSheetName = sheetNamesLower[candidate];
-            break;
-          }
+        const course = importCourseWorkbook(new Uint8Array(evt.target.result));
+        if (course.curriculum.length === 0) {
+          showToast(`Nothing was loaded from "${file.name}": ${course.warnings.join(' ')}`);
+          return;
         }
-
-        if (settingsSheetName) {
-          const settingsRows = XLSX.utils.sheet_to_json(workbook.Sheets[settingsSheetName], { header: 1 });
-          if (settingsRows && settingsRows.length > 0) {
-            // Check if vertical (Setting | Value) or horizontal table
-            const firstRow = settingsRows[0] || [];
-            const isVertical = firstRow.some(cell => {
-              const str = String(cell).toLowerCase().trim();
-              return str === "setting" || str === "key" || str === "property" || str === "class_name" || str === "course title";
-            });
-
-            if (isVertical) {
-              settingsRows.forEach(row => {
-                if (!row || row.length < 2) return;
-                const k = String(row[0] || "").toLowerCase().trim().replace(/[\s_-]+/g, "_");
-                const v = row[1];
-                if (v !== undefined && v !== null && String(v).trim() !== "") {
-                  const valStr = String(v).trim();
-                  if (k.includes("teacher") || k.includes("instructor") || k.includes("faculty")) {
-                    newSettings.teachers = valStr.split(/[\r\n,;]+/).map(t => t.trim().toLowerCase()).filter(t => t && t.includes('@'));
-                  } else if (k === "class_name" || k === "name" || k === "course_name" || k === "course_title" || k === "title") {
-                    newSettings.class_name = valStr;
-                  } else if (k === "section" || k === "cohort") {
-                    newSettings.section = valStr;
-                  } else if (k === "subject" || k === "subject_area" || k === "department") {
-                    newSettings.subject = valStr;
-                  } else if (k === "level" || k === "academic_level") {
-                    newSettings.level = valStr;
-                  } else if (k === "room" || k === "location" || k === "virtual_room") {
-                    newSettings.room = valStr;
-                  } else if (k.includes("announcement") || k.includes("welcome")) {
-                    newSettings.welcome_announcement = valStr;
-                  }
-                }
-              });
-            } else {
-              // Horizontal row
-              const objRows = XLSX.utils.sheet_to_json(workbook.Sheets[settingsSheetName]);
-              if (objRows.length > 0) {
-                const r = objRows[0];
-                Object.keys(r).forEach(k => {
-                  const kl = k.toLowerCase().trim().replace(/[\s_-]+/g, "_");
-                  const valStr = String(r[k]).trim();
-                  if (kl.includes("teacher")) {
-                    newSettings.teachers = valStr.split(/[\r\n,;]+/).map(t => t.trim().toLowerCase()).filter(t => t && t.includes('@'));
-                  } else if (kl.includes("name") || kl.includes("title")) {
-                    newSettings.class_name = valStr;
-                  } else if (kl.includes("section") || kl.includes("cohort")) {
-                    newSettings.section = valStr;
-                  } else if (kl.includes("subject")) {
-                    newSettings.subject = valStr;
-                  } else if (kl.includes("level")) {
-                    newSettings.level = valStr;
-                  } else if (kl.includes("room")) {
-                    newSettings.room = valStr;
-                  } else if (kl.includes("announcement") || kl.includes("welcome")) {
-                    newSettings.welcome_announcement = valStr;
-                  }
-                });
-              }
-            }
-          }
-        }
-
-        // 2. Parse Students / Roster sheet
-        let foundEmails = [];
-        let studentSheetName = null;
-        for (const candidate of ["students", "student", "roster", "class roster", "student roster", "enrollment", "student list"]) {
-          if (sheetNamesLower[candidate]) {
-            studentSheetName = sheetNamesLower[candidate];
-            break;
-          }
-        }
-
-        if (studentSheetName) {
-          const sRows = XLSX.utils.sheet_to_json(workbook.Sheets[studentSheetName]);
-          sRows.forEach(r => {
-            const eVal = r["Student Email"] || r["Email"] || r["email"] || r["student_email"] || r["Student"] || Object.values(r).find(v => typeof v === 'string' && v.includes('@'));
-            if (eVal && String(eVal).includes('@')) {
-              const cleanE = String(eVal).trim().toLowerCase();
-              if (!foundEmails.includes(cleanE)) foundEmails.push(cleanE);
-            }
-          });
-        }
-
-        // 3. Parse Curriculum sheet (All 13 weekly categories)
-        let currSheetName = null;
-        for (const candidate of ["curriculum", "modules", "weeks", "coursework", "syllabus", "topics"]) {
-          if (sheetNamesLower[candidate]) {
-            currSheetName = sheetNamesLower[candidate];
-            break;
-          }
-        }
-        if (!currSheetName) {
-          currSheetName = workbook.SheetNames.find(name => {
-            const nl = name.toLowerCase();
-            return !nl.includes("setting") && !nl.includes("student") && !nl.includes("readme") && !nl.includes("instruction");
-          }) || workbook.SheetNames[0];
-        }
-
-        const currSheet = workbook.Sheets[currSheetName];
-        const currJson = XLSX.utils.sheet_to_json(currSheet);
-
-        const newCurriculum = currJson.map((row, idx) => {
-          let seq = `Week ${idx + 1}`;
-          let stream_topic = "";
-          let title = `Module ${idx + 1}`;
-          let overview = "";
-          let lecture_urls = [];
-          let assignment_title = "";
-          let assignment_instructions = "";
-          let quiz_title = "";
-          let quiz_url = "";
-          let question_prompt = "";
-          let question_type = "SHORT_ANSWER_QUESTION";
-          let points = 100;
-          let due_date = "2026-10-30";
-
-          Object.keys(row).forEach(k => {
-            const kl = k.toLowerCase().trim().replace(/[\s_-]+/g, " ");
-            const val = String(row[k] !== undefined && row[k] !== null ? row[k] : "").trim();
-            if (!val) return;
-
-            if (kl.includes('stream topic') || kl.includes('classroom stream') || kl.includes('classroom topic') || kl === 'stream') {
-              stream_topic = val;
-            } else if (kl === 'week' || kl.includes('module #') || kl.includes('module number') || kl.includes('unit')) {
-              seq = val;
-            } else if (kl.includes('module title') || kl.includes('topic title') || kl === 'title') {
-              title = val;
-            } else if (kl.includes('overview') || kl.includes('description') || kl.includes('summary')) {
-              overview = val;
-            } else if (kl.includes('lecture') || kl.includes('presentation') || kl.includes('slides') || kl.includes('materials url')) {
-              const parts = val.split(/[\r\n,;]+/).map(s => s.trim()).filter(Boolean);
-              lecture_urls = parts.length > 0 ? parts : [val];
-            } else if (kl.includes('assignment instructions') || kl.includes('instructions')) {
-              assignment_instructions = val;
-            } else if (kl.includes('quiz assignment') || kl.includes('quiz title') || kl.includes('quiz name')) {
-              quiz_title = val;
-            } else if (kl.includes('quiz url') || kl.includes('quiz form') || kl.includes('google form') || kl.includes('form url')) {
-              quiz_url = val;
-            } else if (kl.includes('question prompt') || kl.includes('question') || kl.includes('discussion')) {
-              question_prompt = val;
-            } else if (kl.includes('question type') || kl.includes('prompt type')) {
-              question_type = val.toUpperCase().includes('MULTIPLE') ? "MULTIPLE_CHOICE_QUESTION" : "SHORT_ANSWER_QUESTION";
-            } else if (kl.includes('assignment') || kl.includes('assessment') || kl.includes('knowledge check')) {
-              assignment_title = val;
-            } else if (kl.includes('points') || kl.includes('score') || kl.includes('max points')) {
-              points = Number(val) || 100;
-            } else if (kl.includes('due') || kl.includes('date') || kl.includes('deadline')) {
-              due_date = val;
-            }
-          });
-
-          return {
-            sequence: seq,
-            stream_topic: stream_topic || `${seq}: ${title}`,
-            title: title,
-            overview: overview,
-            presentation_urls: lecture_urls.length > 0 ? lecture_urls : [""],
-            presentation_url: lecture_urls[0] || "",
-            assignment_title: assignment_title,
-            assignment_instructions: assignment_instructions,
-            quiz_title: quiz_title,
-            quiz_url: quiz_url,
-            question_prompt: question_prompt,
-            question_type: question_type,
-            points: points,
-            due_date: due_date
-          };
-        });
-
-        setSettings(newSettings);
-        if (foundEmails.length > 0) {
-          setStudents(foundEmails);
-        }
-        if (newCurriculum.length > 0) {
-          setCurriculum(newCurriculum);
-          setCurrentModuleIndex(0);
-        }
-
-        const teacherCount = (newSettings.teachers || []).length;
-        const studentCount = foundEmails.length > 0 ? foundEmails.length : students.length;
-        const weekCount = newCurriculum.length;
-
-        setImportedWorkbookInfo({
-          loaded: true,
-          fileName: file.name,
-          courseName: newSettings.class_name,
-          section: newSettings.section,
-          weekCount: weekCount,
-          teacherCount: teacherCount,
-          studentCount: studentCount,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        });
-
-        showToast(`Parsed "${file.name}": ${weekCount} weeks, ${teacherCount} co-teachers, and ${studentCount} students loaded! Review below, then click Finish & Create Course.`);
+        applyImportedCourse(course, file.name);
       } catch (err) {
-        showToast(`Error parsing workbook: ${err.message}`);
+        showToast(`Could not read "${file.name}": ${err.message}`);
       }
     };
     reader.readAsArrayBuffer(file);
@@ -1111,7 +686,15 @@ export default function App() {
       question_prompt: `What were the main architectural trade-offs encountered in Week ${nextWeek}?`,
       question_type: "SHORT_ANSWER_QUESTION",
       points: 100,
-      due_date: "2026-11-15"
+      due_date: "2026-11-15",
+      youtube_urls: [""],
+      notebook_enabled: false,
+      notebook_url: "",
+      question_choices: [],
+      question_points: "",
+      quiz_points: "",
+      quiz_questions: [],
+      rubric_url: ""
     };
     const updated = [...curriculum, newMod];
     setCurriculum(updated);
@@ -1132,6 +715,87 @@ export default function App() {
     showToast("Module removed from curriculum.");
   };
 
+  // Clearing: the whole form, or one section. Nothing is cleared until the teacher confirms.
+  const [clearRequest, setClearRequest] = useState(null); // { title, body, onConfirm, done }
+
+  const clearWholeForm = () => {
+    setSettings({ ...BLANK_SETTINGS, teachers: [] });
+    setCurriculum([blankModule(1)]);
+    setStudents([]);
+    setCurrentModuleIndex(0);
+    setImportedWorkbookInfo(null);
+    setNewTeacherEmail("");
+    setNewStudentEmail("");
+    setBulkStudentText("");
+    setStudentSearchQuery("");
+  };
+
+  const requestClearForm = () => setClearRequest({
+    title: "Clear the whole form?",
+    body: `This removes everything for ${settings.class_name || "this course"}: course settings, ${(settings.teachers || []).length} co-teacher(s), ${students.length} student(s), and all ${curriculum.length} week(s) with their links, notebooks, videos and coursework.`,
+    onConfirm: clearWholeForm,
+    done: "Form cleared. Start a new course from Week 1.",
+  });
+
+  // Fields each week section owns. Clearing a week section resets only the week being edited.
+  const WEEK_SECTION_FIELDS = {
+    topic: { label: "Topic & Module Details", fields: { stream_topic: "", title: "", overview: "" } },
+    material: { label: "Material (links, notebook & YouTube)", fields: { presentation_urls: [""], presentation_url: "", youtube_urls: [""], notebook_enabled: false, notebook_url: "" } },
+    assignment: { label: "Assignment", fields: { assignment_title: "", assignment_instructions: "", rubric_url: "", points: 100, due_date: "" },
+      note: " The due date is shared with this week's quiz and question, so it is cleared for them too." },
+    quiz: { label: "Quiz Assignment", fields: { quiz_title: "", quiz_url: "", quiz_points: "", quiz_questions: [] } },
+    question: { label: "Question", fields: { question_prompt: "", question_type: "SHORT_ANSWER_QUESTION", question_choices: [], question_points: "" } },
+  };
+
+  const requestSectionClear = (section) => {
+    if (section === 'metadata') {
+      setClearRequest({
+        title: "Clear Course Settings?",
+        body: `This empties the course name, section, subject, level, room, welcome announcement and ${(settings.teachers || []).length} co-teacher(s). Weeks and students stay.`,
+        onConfirm: () => { setSettings({ ...BLANK_SETTINGS, teachers: [] }); setNewTeacherEmail(""); },
+        done: "Course settings cleared.",
+      });
+    } else if (section === 'students') {
+      setClearRequest({
+        title: "Clear the student roster?",
+        body: `This removes all ${students.length} student(s) from the form. Weeks and course settings stay.`,
+        onConfirm: () => { setStudents([]); setNewStudentEmail(""); setBulkStudentText(""); setStudentSearchQuery(""); },
+        done: "Student roster cleared.",
+      });
+    } else {
+      const { label, fields, note = "" } = WEEK_SECTION_FIELDS[section];
+      const week = currentMod.sequence || `Week ${currentModuleIndex + 1}`;
+      const index = currentModuleIndex;
+      setClearRequest({
+        title: `Clear ${label} for ${week}?`,
+        body: `This empties the ${label} section of ${week} only. Other weeks and sections stay.${note}`,
+        onConfirm: () => setCurriculum(prev => prev.map((m, i) => i === index ? { ...m, ...fields } : m)),
+        done: `${label} cleared for ${week}.`,
+      });
+    }
+  };
+
+  const confirmClear = () => {
+    clearRequest.onConfirm();
+    showToast(clearRequest.done);
+    setClearRequest(null);
+  };
+
+  // Small Clear button for a panel header. It must not also toggle the panel open or closed.
+  const sectionClearButton = (section) => (
+    <button
+      type="button"
+      className="btn-secondary"
+      onClick={e => { e.stopPropagation(); requestSectionClear(section); }}
+      disabled={isProcessing}
+      title="Clear this section"
+      style={{ fontSize: '0.75rem', padding: '4px 10px', color: '#ea4335' }}
+    >
+      <Trash2 size={13} />
+      <span>Clear</span>
+    </button>
+  );
+
   // Create course action (Upload to Google Classroom)
   const handleCreateCourse = async () => {
     if (!currentUser) {
@@ -1140,29 +804,110 @@ export default function App() {
       return;
     }
 
+    if (!(settings.class_name || "").trim()) {
+      showToast("Give the course a name (Course Settings) before creating it.");
+      setOpenPanels(prev => ({ ...prev, metadata: true }));
+      return;
+    }
+
+    // The built-in samples use made-up addresses. Co-teachers are invited when they cannot be
+    // added, and inviting made-up people wastes the teacher's Google invitation limit (and mails
+    // a real domain), so refuse until they are removed. Students are never added automatically.
+    const sampleTeachers = (settings.teachers || [])
+      .map(e => String(typeof e === 'string' ? e : (e && e.email) || '').toLowerCase())
+      .filter(e => SAMPLE_EMAILS.has(e));
+    if (sampleTeachers.length > 0) {
+      showToast(`Remove the ${sampleTeachers.length} sample co-teacher(s) first (e.g. ${sampleTeachers[0]}). They are made-up addresses, and inviting them uses up your Google invitation limit. Use Clear on Course Settings.`);
+      return;
+    }
+
+    const badNotebook = curriculum.find(m => m.notebook_enabled && m.notebook_url && !isNotebookUrl(m.notebook_url));
+    if (badNotebook) {
+      showToast(`${badNotebook.sequence || 'A topic'}: the notebook link must start with ${NOTEBOOK_HOSTS_TEXT}.`);
+      return;
+    }
+
+    const badDue = curriculum.find(m => !isIsoDue(m.due_date));
+    if (badDue) {
+      showToast(`${badDue.sequence || 'A week'}: due date "${badDue.due_date}" is not ISO 8601. Use YYYY-MM-DD, or YYYY-MM-DDTHH:MM for a time.`);
+      return;
+    }
+
+    const badChoices = curriculum.find(m => m.question_prompt && m.question_type === 'MULTIPLE_CHOICE_QUESTION' && nonEmptyChoices(m).length < 2);
+    if (badChoices) {
+      showToast(`${badChoices.sequence || 'A week'}: the multiple-choice question needs at least 2 choices (Question panel).`);
+      return;
+    }
+
+    for (const mod of curriculum) {
+      const index = (mod.quiz_questions || []).findIndex(q => quizQuestionProblems(q).length > 0);
+      if (index >= 0) {
+        showToast(`${mod.sequence || 'A week'}, quiz question ${index + 1}: ${quizQuestionProblems(mod.quiz_questions[index]).join('; ')} (Quiz panel).`);
+        return;
+      }
+    }
+
+    const badRubric = curriculum.find(m => m.rubric_url && !isSheetLink(m.rubric_url));
+    if (badRubric) {
+      showToast(`${badRubric.sequence || 'A week'}: the rubric link must be the full link of a Google Sheet (Assignment panel).`);
+      return;
+    }
+
     setIsProcessing(true);
+    // Keep a copy of exactly what is sent: the completion workbook is built from it.
+    const deployed = JSON.parse(JSON.stringify({ settings, curriculum, students }));
+    setDeployProgress({ status: 'starting', log: [], courseName: settings.class_name, deployed });
     try {
       const res = await fetch('/api/courses/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ settings, curriculum, students })
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        showToast(`Created Course: "${settings.class_name}" (ID: ${data.course.id})!`);
-        await checkAuthAndFetchData();
-        setActiveTab('courses');
-      } else {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Server responded with status: ${res.status}`);
+      const started = await res.json().catch(() => ({}));
+      if (!res.ok || !started.jobId) {
+        throw new Error(started.error || `Server responded with status: ${res.status}`);
       }
+
+      // Poll the background job. The server answers instantly; the build itself can take minutes.
+      let misses = 0;
+      while (true) {
+        await new Promise(r => setTimeout(r, 1500));
+        let job;
+        try {
+          const poll = await fetch(`/api/courses/create/status?job=${encodeURIComponent(started.jobId)}`);
+          job = await poll.json();
+          if (!poll.ok) throw new Error(job.error || `status ${poll.status}`);
+          misses = 0;
+        } catch (pollErr) {
+          if (++misses >= 5) throw new Error(`Lost contact with the server while deploying (${pollErr.message}). Check Google Classroom before trying again, as the course may already exist.`);
+          continue;
+        }
+        setDeployProgress(p => ({ ...p, status: job.status, log: job.log || [], error: job.error, result: job.result }));
+        if (job.status === 'error') throw new Error(job.error);
+        if (job.status === 'done') {
+          const failed = job.result.failedSteps || [];
+          showToast(`Created "${deployed.settings.class_name}". Class code: ${job.result.enrollmentCode || 'see Classroom'}.${failed.length ? ` ${failed.length} step(s) need attention: see the deployment log.` : ''}`);
+          break;
+        }
+      }
+      setActiveTab('courses');
+      // Refreshing the course list re-reads every course, so do it without blocking the button.
+      checkAuthAndFetchData();
     } catch (err) {
       console.error(err);
+      setDeployProgress(p => p ? { ...p, status: 'error', error: err.message } : p);
       showToast(`Error creating course: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  // The completion workbook: the course as sent, plus the class code, every post and the log
+  const handleDownloadDeployedWorkbook = () => {
+    if (!deployProgress || !deployProgress.result || !deployProgress.deployed) return;
+    const fileName = `${(deployProgress.deployed.settings.class_name || "Course").replace(/[^a-zA-Z0-9]/g, "_")}_Classroom_Course.xlsx`;
+    XLSX.writeFile(buildDeployedWorkbook(deployProgress.deployed, deployProgress.result), fileName);
+    showToast(`Downloaded "${fileName}".`);
   };
 
   // Safe Non-Destructive Update action
@@ -1263,6 +1008,15 @@ export default function App() {
     setCurriculum(updated);
   };
 
+  // YouTube videos for the current topic (attached as native Classroom video materials)
+  const currentYoutubeUrls = (currentMod.youtube_urls && currentMod.youtube_urls.length > 0) ? currentMod.youtube_urls : [""];
+  const handleAddYoutubeUrl = () => updateCurrentMod('youtube_urls', [...currentYoutubeUrls, ""]);
+  const handleUpdateYoutubeUrl = (idx, url) => updateCurrentMod('youtube_urls', currentYoutubeUrls.map((u, i) => i === idx ? url : u));
+  const handleRemoveYoutubeUrl = (idx) => {
+    const urls = currentYoutubeUrls.filter((_, i) => i !== idx);
+    updateCurrentMod('youtube_urls', urls.length > 0 ? urls : [""]);
+  };
+
   const handleRemovePresentationLink = (linkIdx) => {
     let urls = currentPresentationUrls.filter((_, i) => i !== linkIdx);
     if (urls.length === 0) urls = [""];
@@ -1277,6 +1031,12 @@ export default function App() {
 
   return (
     <div className="app-container">
+      <DeployProgress
+        progress={deployProgress}
+        onClose={() => setDeployProgress(null)}
+        onDownloadWorkbook={handleDownloadDeployedWorkbook}
+      />
+
       {/* Toast Notification */}
       {toastMessage && (
         <div className="toast-success">
@@ -1449,7 +1209,7 @@ export default function App() {
             <div style={{ overflowY: 'auto', flex: 1, paddingRight: '6px' }}>
               <div className="review-all-grid">
                 {curriculum.map((mod, idx) => {
-                  const pCount = (mod.presentation_urls && mod.presentation_urls.filter(Boolean).length) || (mod.presentation_url ? 1 : 0);
+                  const pCount = topicAttachmentCount(mod);
                   return (
                     <div
                       key={idx}
@@ -1479,7 +1239,7 @@ export default function App() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <Link2 size={13} color="#4285f4" />
                           <span style={{ color: pCount > 0 ? '#cbd5e1' : '#64748b' }}>
-                            Material: {pCount > 0 ? `${pCount} Link(s) Attached` : "None"}
+                            Material: {pCount > 0 ? `${pCount} Item(s) Attached` : "None"}
                           </span>
                         </div>
 
@@ -1584,6 +1344,47 @@ export default function App() {
       {/* ================================================================= */}
       {/* MODAL 3: BULK STUDENT EMAIL INPUT DIALOG */}
       {/* ================================================================= */}
+      {clearRequest && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="clear-form-title"
+          onKeyDown={e => { if (e.key === 'Escape') setClearRequest(null); }}
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0, 0, 0, 0.8)', backdropFilter: 'blur(8px)', zIndex: 1300,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px'
+          }}
+        >
+          <div className="login-card animate-fade-in" style={{ maxWidth: '460px', position: 'relative' }}>
+            <h2 id="clear-form-title" style={{ fontSize: '1.15rem', marginBottom: '10px' }}>{clearRequest.title}</h2>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '8px' }}>
+              {clearRequest.body}
+            </p>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '18px' }}>
+              Courses already deployed to Google Classroom are not affected. To keep a copy of this form, use Save .xlsx first.
+            </p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button className="btn-secondary" onClick={handleExportExcel}>
+                <Download size={15} color="#fbbc05" />
+                <span>Save .xlsx first</span>
+              </button>
+              <button className="btn-secondary" autoFocus onClick={() => setClearRequest(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={confirmClear}
+                style={{ background: '#ea4335', borderColor: '#ea4335' }}
+              >
+                <Trash2 size={15} />
+                <span>Yes, clear</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showBulkStudentModal && (
         <div style={{
           position: 'fixed',
@@ -1672,7 +1473,7 @@ export default function App() {
             <GraduationCap size={24} />
           </div>
           <div>
-            <div className="brand-title">Course Builder</div>
+            <div className="brand-title">GCourse Builder</div>
             <div className="brand-subtitle">Google Classroom Engine</div>
           </div>
         </div>
@@ -1721,33 +1522,7 @@ export default function App() {
               )}
             </div>
           </div>
-        ) : (
-          <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '12px', marginBottom: '20px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#cbd5e1' }}>Not Signed In</div>
-                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Guest Spreadsheet Mode</div>
-              </div>
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <button
-                  onClick={() => setShowLoginModal(true)}
-                  className="btn-secondary"
-                  style={{ padding: '5px 8px', fontSize: '0.75rem', borderColor: 'rgba(66, 133, 244, 0.5)', color: '#1e40af' }}
-                >
-                  Log In
-                </button>
-                <button
-                  onClick={() => setShowRegistrationModal(true)}
-                  className="btn-primary"
-                  style={{ padding: '5px 10px', fontSize: '0.75rem', background: '#6366f1', color: '#fff', border: 'none', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
-                >
-                  <CreditCard size={12} />
-                  <span>Register</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        ) : null}
 
         <nav className="nav-menu">
           <button
@@ -1768,48 +1543,10 @@ export default function App() {
             <span className="nav-badge">{courses.length}</span>
           </button>
 
-          <button
-            className={`nav-item ${activeTab === 'sync' ? 'active' : ''}`}
-            onClick={() => setActiveTab('sync')}
-          >
-            <RefreshCw size={18} />
-            <span>Safe Course Update</span>
-          </button>
-
-          <button
-            className={`nav-item ${activeTab === 'audit' ? 'active' : ''}`}
-            onClick={() => setActiveTab('audit')}
-          >
-            <ShieldCheck size={18} />
-            <span>Safety & API Audit</span>
-          </button>
-
-          <button
-            className={`nav-item ${activeTab === 'lms-members' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('lms-members');
-              fetchLmsMembers();
-            }}
-          >
-            <Users size={18} />
-            <span>LMS Members</span>
-            {isSuperAdmin ? (
-              <span className="nav-badge" style={{ background: '#6366f1' }}>tag: lms</span>
-            ) : (
-              <span className="nav-badge">{lmsMembers.length}</span>
-            )}
-          </button>
         </nav>
 
         {/* Server & Safety Guardrail Badge */}
         <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          <div style={{ background: 'rgba(255, 255, 255, 0.04)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '10px 14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              <Server size={14} color={backendStatus.online ? "#34a853" : "#fbbc05"} />
-              <span>Engine: <strong style={{ color: 'var(--text-main)' }}>{backendStatus.mode}</strong></span>
-            </div>
-          </div>
-
           <div className="safety-card">
             <div className="safety-header">
               <ShieldCheck size={16} />
@@ -1830,18 +1567,10 @@ export default function App() {
             <h1 className="page-title">
               {activeTab === 'studio' && "Course Studio & Weekly Modules"}
               {activeTab === 'courses' && "Active Classroom Courses"}
-              {activeTab === 'sync' && "Non-Destructive Course Update"}
-              {activeTab === 'audit' && "API Security & Guardrail Audit"}
-              {activeTab === 'lms-members' && "LMS Registered Members (Stripe & Firebase)"}
             </h1>
             <p className="page-desc">
               {activeTab === 'studio' && "Step through one module at a time. All panels are collapsible dropdowns to maximize workspace."}
-              {activeTab === 'courses' && "Live courses published in Google Classroom with enrollment codes and topic lists."}
-              {activeTab === 'sync' && "Safely sync spreadsheet changes into Google Classroom without deleting existing items."}
-              {activeTab === 'audit' && "Static AST verification verifying NO-DELETE safety policy and presentation link compliance."}
-              {activeTab === 'lms-members' && (isSuperAdmin 
-                ? "Centralized members database synced with Stripe Client IDs and tagged with 'lms' for shared access."
-                : "Centralized directory of registered course members and client accounts.")}
+              {activeTab === 'courses' && "Your Google Classroom courses, shown with the same stream, classwork, and people layout."}
             </p>
           </div>
 
@@ -1860,6 +1589,17 @@ export default function App() {
               <span>Upload .xlsx</span>
               <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} style={{ display: 'none' }} />
             </label>
+            {activeTab === 'studio' && (
+              <button
+                className="btn-secondary"
+                onClick={requestClearForm}
+                disabled={isProcessing}
+                title="Clear the form to start a new course"
+              >
+                <Trash2 size={15} color="#ea4335" />
+                <span>Clear</span>
+              </button>
+            )}
 
             {activeTab === 'studio' && (
               <button
@@ -1875,7 +1615,7 @@ export default function App() {
             )}
 
             {/* TOP RIGHT LOG IN BUTTON / LOGGED IN STATUS */}
-            {!currentUser ? (
+            {!currentUser && activeTab !== 'studio' ? null : !currentUser ? (
               <button
                 className="google-btn-top"
                 onClick={() => setShowLoginModal(true)}
@@ -1958,7 +1698,7 @@ export default function App() {
             </div>
             <div>
               <div className="stat-val">
-                {curriculum.reduce((acc, c) => acc + ((c.presentation_urls && c.presentation_urls.filter(Boolean).length) || (c.presentation_url ? 1 : 0)), 0)}
+                {curriculum.reduce((acc, c) => acc + topicAttachmentCount(c), 0)}
               </div>
               <div className="stat-lbl">Attached Materials</div>
             </div>
@@ -1997,6 +1737,14 @@ export default function App() {
                     <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', margin: '3px 0 0 0' }}>
                       Imported from <strong>"{importedWorkbookInfo.fileName}"</strong>: Loaded <strong>{importedWorkbookInfo.weekCount} weekly modules</strong>, <strong>{importedWorkbookInfo.teacherCount} co-teachers</strong>, and <strong>{importedWorkbookInfo.studentCount} students</strong>. Review all elements below, then click Finish & Create Course.
                     </p>
+                    {(importedWorkbookInfo.warnings || []).length > 0 && (
+                      <div role="alert" style={{ marginTop: '8px', fontSize: '0.82rem', color: '#b45309' }}>
+                        <strong>Check before deploying:</strong>
+                        <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
+                          {importedWorkbookInfo.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -2031,22 +1779,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Quick Load Preset Selector */}
-            <div className="glass-panel" style={{ padding: '14px 20px', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <FileSpreadsheet size={18} color="#4285f4" />
-                <span style={{ fontSize: '0.88rem', fontWeight: 600 }}>Curriculum Preset:</span>
-              </div>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button className="btn-secondary" style={{ padding: '5px 12px', fontSize: '0.82rem' }} onClick={() => handleLoadPreset('cloud')}>
-                  Cloud Computing (CS101)
-                </button>
-                <button className="btn-secondary" style={{ padding: '5px 12px', fontSize: '0.82rem' }} onClick={() => handleLoadPreset('ai')}>
-                  Machine Learning (AI200)
-                </button>
-              </div>
-            </div>
-
             {/* PANEL 0: COURSE METADATA & STREAM ANNOUNCEMENT (COLLAPSIBLE DROPDOWN) */}
             <div className="item-section-card" style={{ padding: 0, marginBottom: '20px' }}>
               <div
@@ -2069,6 +1801,7 @@ export default function App() {
                   <span className="item-pill-badge" style={{ background: 'rgba(66, 133, 244, 0.15)', color: '#1e40af' }}>
                     {openPanels.metadata ? "Open" : "Click to Expand"}
                   </span>
+                  {sectionClearButton('metadata')}
                   {openPanels.metadata ? <ChevronUp size={18} color="#94a3b8" /> : <ChevronDown size={18} color="#94a3b8" />}
                 </div>
               </div>
@@ -2132,16 +1865,6 @@ export default function App() {
                         className="form-control"
                         value={settings.room}
                         onChange={e => setSettings({ ...settings, room: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="form-group" style={{ gridColumn: '1 / -1', marginBottom: 0 }}>
-                      <label className="form-label">Stream Welcome Announcement</label>
-                      <textarea
-                        rows={2}
-                        className="form-control"
-                        value={settings.welcome_announcement}
-                        onChange={e => setSettings({ ...settings, welcome_announcement: e.target.value })}
                       />
                     </div>
 
@@ -2238,17 +1961,18 @@ export default function App() {
                       Course Students & Roster Management
                     </span>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '12px' }}>
-                      Add by email address or upload / export via .xlsx
+                      Your class list, used to email students the class code. Students are not added to Classroom automatically
                     </span>
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <span className="item-pill-badge" style={{ background: 'rgba(52, 168, 83, 0.15)', color: '#4ade80' }}>
-                    {students.length} Student(s) Enrolled
+                    {students.length} on class list
                   </span>
                   <span className="item-pill-badge" style={{ background: 'var(--border-color)', color: 'var(--text-muted)' }}>
                     {openPanels.students ? "Open" : "Click to Expand"}
                   </span>
+                  {sectionClearButton('students')}
                   {openPanels.students ? <ChevronUp size={18} color="#94a3b8" /> : <ChevronDown size={18} color="#94a3b8" />}
                 </div>
               </div>
@@ -2331,12 +2055,7 @@ export default function App() {
                           type="button"
                           className="btn-secondary"
                           style={{ fontSize: '0.82rem', padding: '8px 10px', color: '#991b1b' }}
-                          onClick={() => {
-                            if (window.confirm("Clear all students from roster?")) {
-                              setStudents([]);
-                              showToast("Cleared student roster.");
-                            }
-                          }}
+                          onClick={() => requestSectionClear('students')}
                           title="Clear all students"
                         >
                           <Trash2 size={15} />
@@ -2552,6 +2271,7 @@ export default function App() {
                     <span className="item-pill-badge" style={{ background: 'rgba(66, 133, 244, 0.15)', color: '#1e40af' }}>
                       Topic
                     </span>
+                    {sectionClearButton('topic')}
                     {openPanels.topic ? <ChevronUp size={18} color="#94a3b8" /> : <ChevronDown size={18} color="#94a3b8" />}
                   </div>
                 </div>
@@ -2607,9 +2327,9 @@ export default function App() {
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <Link2 size={18} color="#34a853" />
-                    <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>2. Material (Presentation & Document Links)</span>
+                    <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>2. Material (Links, Notebook & YouTube)</span>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '8px' }}>
-                      {currentPresentationUrls.filter(Boolean).length} link(s) attached
+                      {topicAttachmentCount(currentMod)} item(s) attached
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -2617,6 +2337,7 @@ export default function App() {
                     <span className="item-pill-badge" style={{ background: 'rgba(52, 168, 83, 0.15)', color: '#34a853' }}>
                       Material
                     </span>
+                    {sectionClearButton('material')}
                     {openPanels.material ? <ChevronUp size={18} color="#94a3b8" /> : <ChevronDown size={18} color="#94a3b8" />}
                   </div>
                 </div>
@@ -2624,8 +2345,40 @@ export default function App() {
                 {openPanels.material && (
                   <div className="dropdown-panel-content" style={{ paddingTop: '16px' }}>
                     <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '14px' }}>
-                      Add one or more Google Slides decks, lecture docs, or reference materials. Classroom API automatically generates preview cards for each URL.
+                      Everything here is attached to this topic's lecture-materials post in Classroom: a notebook, Google Slides decks and documents, and YouTube videos.
                     </p>
+
+                    {/* Notebook (asked per topic) */}
+                    <div className="multi-link-card">
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={!!currentMod.notebook_enabled}
+                          onChange={e => updateCurrentMod('notebook_enabled', e.target.checked)}
+                        />
+                        <span>Attach a Gemini / NotebookLM notebook to this topic?</span>
+                      </label>
+                      {currentMod.notebook_enabled && (
+                        <div style={{ marginTop: '8px' }}>
+                          <input
+                            type="url"
+                            className="form-control"
+                            aria-label="Notebook URL"
+                            placeholder="https://notebooklm.google.com/notebook/..."
+                            value={currentMod.notebook_url || ""}
+                            onChange={e => updateCurrentMod('notebook_url', e.target.value)}
+                          />
+                          {currentMod.notebook_url && !isNotebookUrl(currentMod.notebook_url) && (
+                            <p role="alert" style={{ color: '#ea4335', fontSize: '0.78rem', marginTop: '6px' }}>
+                              Use a notebook link that starts with {NOTEBOOK_HOSTS_TEXT}.
+                            </p>
+                          )}
+                          <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '6px' }}>
+                            Share the notebook with your students first, or the link will not open for them.
+                          </p>
+                        </div>
+                      )}
+                    </div>
 
                     {currentPresentationUrls.map((url, linkIdx) => (
                       <div key={linkIdx} className="multi-link-card">
@@ -2681,6 +2434,56 @@ export default function App() {
                       <Plus size={14} />
                       <span>+ Add Another Presentation / Document Link</span>
                     </button>
+
+                    {/* YouTube videos */}
+                    <div style={{ marginTop: '18px', fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-main)' }}>
+                      ▶ YouTube Videos
+                    </div>
+                    {currentYoutubeUrls.map((url, vIdx) => {
+                      const vid = youtubeId(url);
+                      return (
+                        <div key={vIdx} className="multi-link-card">
+                          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                            <input
+                              type="url"
+                              className="form-control"
+                              aria-label={`YouTube video ${vIdx + 1}`}
+                              placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/..."
+                              value={url}
+                              onChange={e => handleUpdateYoutubeUrl(vIdx, e.target.value)}
+                            />
+                            {currentYoutubeUrls.length > 1 && (
+                              <button
+                                onClick={() => handleRemoveYoutubeUrl(vIdx)}
+                                style={{ background: 'transparent', color: '#991b1b', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem' }}
+                                title="Remove this video"
+                              >
+                                <Trash2 size={13} />
+                                <span>Remove</span>
+                              </button>
+                            )}
+                          </div>
+                          {url && (vid ? (
+                            <div className="link-preview-box" style={{ marginTop: '8px' }}>
+                              <img src={`https://i.ytimg.com/vi/${vid}/default.jpg`} alt="" width={48} height={36} style={{ borderRadius: 4, objectFit: 'cover' }} />
+                              <span className="link-preview-url">Video ID {vid}: attached as a YouTube video</span>
+                            </div>
+                          ) : (
+                            <p role="alert" style={{ color: '#ea4335', fontSize: '0.78rem', marginTop: '6px' }}>
+                              This is not a YouTube video link. It will be attached as a plain link instead.
+                            </p>
+                          ))}
+                        </div>
+                      );
+                    })}
+                    <button
+                      className="btn-secondary"
+                      style={{ marginTop: '6px', fontSize: '0.82rem', padding: '6px 14px' }}
+                      onClick={handleAddYoutubeUrl}
+                    >
+                      <Plus size={14} />
+                      <span>+ Add YouTube Video</span>
+                    </button>
                   </div>
                 )}
               </div>
@@ -2703,6 +2506,7 @@ export default function App() {
                     <span className="item-pill-badge" style={{ background: 'rgba(251, 188, 5, 0.15)', color: '#fbbc05' }}>
                       Assignment
                     </span>
+                    {sectionClearButton('assignment')}
                     {openPanels.assignment ? <ChevronUp size={18} color="#94a3b8" /> : <ChevronDown size={18} color="#94a3b8" />}
                   </div>
                 </div>
@@ -2725,20 +2529,50 @@ export default function App() {
                         <label className="form-label">Points</label>
                         <input
                           type="number"
+                          min="0"
+                          step="1"
                           className="form-control"
-                          value={currentMod.points || 100}
-                          onChange={e => updateCurrentMod('points', Number(e.target.value))}
+                          placeholder="100"
+                          value={currentMod.points ?? 100}
+                          onChange={e => updateCurrentMod('points', e.target.value === '' ? '' : Number(e.target.value))}
                         />
                       </div>
 
                       <div>
                         <label className="form-label">Due Date</label>
-                        <input
-                          type="date"
-                          className="form-control"
-                          value={currentMod.due_date || ""}
-                          onChange={e => updateCurrentMod('due_date', e.target.value)}
-                        />
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <input
+                            type="date"
+                            className="form-control"
+                            aria-label="Due date"
+                            value={splitDue(currentMod.due_date).date}
+                            onChange={e => {
+                              const { time } = splitDue(currentMod.due_date);
+                              updateCurrentMod('due_date', e.target.value ? e.target.value + (time ? `T${time}` : '') : '');
+                            }}
+                          />
+                          <input
+                            type="time"
+                            className="form-control"
+                            aria-label="Due time (optional)"
+                            title="Optional. Blank means 23:59."
+                            value={splitDue(currentMod.due_date).time}
+                            disabled={!splitDue(currentMod.due_date).date}
+                            onChange={e => {
+                              const { date } = splitDue(currentMod.due_date);
+                              updateCurrentMod('due_date', date + (e.target.value ? `T${e.target.value}` : ''));
+                            }}
+                          />
+                        </div>
+                        {currentMod.due_date && !isIsoDue(currentMod.due_date) ? (
+                          <p role="alert" style={{ color: '#ea4335', fontSize: '0.78rem', marginTop: '6px' }}>
+                            "{currentMod.due_date}" is not an ISO 8601 date. Pick a date above, or use YYYY-MM-DD in the spreadsheet.
+                          </p>
+                        ) : (
+                          <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px' }}>
+                            Applies to this week's assignment, quiz and question. Blank time means 23:59, in this computer's time zone.
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -2751,6 +2585,26 @@ export default function App() {
                         value={currentMod.assignment_instructions || ""}
                         onChange={e => updateCurrentMod('assignment_instructions', e.target.value)}
                       />
+                    </div>
+
+                    <div style={{ marginTop: '12px' }}>
+                      <label className="form-label">Rubric (Google Sheet link)</label>
+                      <input
+                        type="url"
+                        className="form-control"
+                        placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+                        value={currentMod.rubric_url || ""}
+                        onChange={e => updateCurrentMod('rubric_url', e.target.value)}
+                      />
+                      {currentMod.rubric_url && !isSheetLink(currentMod.rubric_url) ? (
+                        <p role="alert" style={{ color: '#ea4335', fontSize: '0.78rem', marginTop: '6px' }}>
+                          Use the full link of a Google Sheet, e.g. https://docs.google.com/spreadsheets/d/.../edit.
+                        </p>
+                      ) : (
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px' }}>
+                          A sheet in Classroom's rubric format (as for Rubric &gt; Import from Sheets). It becomes the assignment's rubric; if Classroom refuses it, the link goes in the assignment description.
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2774,6 +2628,7 @@ export default function App() {
                     <span className="item-pill-badge" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7' }}>
                       Quiz
                     </span>
+                    {sectionClearButton('quiz')}
                     {openPanels.quiz ? <ChevronUp size={18} color="#94a3b8" /> : <ChevronDown size={18} color="#94a3b8" />}
                   </div>
                 </div>
@@ -2793,16 +2648,52 @@ export default function App() {
                       </div>
 
                       <div>
-                        <label className="form-label">Google Forms Quiz URL</label>
+                        <label className="form-label">Existing Google Form (optional)</label>
                         <input
                           type="url"
                           className="form-control"
                           placeholder="https://docs.google.com/forms/d/.../viewform"
                           value={currentMod.quiz_url || ""}
+                          disabled={(currentMod.quiz_questions || []).length > 0}
+                          title={(currentMod.quiz_questions || []).length > 0 ? "Not used: the quiz is made from the questions below" : ""}
                           onChange={e => updateCurrentMod('quiz_url', e.target.value)}
                         />
                       </div>
+
+                      <div>
+                        <label className="form-label">Quiz Points</label>
+                        {(currentMod.quiz_questions || []).length > 0 ? (
+                          <input
+                            type="text"
+                            className="form-control"
+                            readOnly
+                            aria-label="Quiz points, the total of the questions"
+                            value={`${quizTotalPoints(currentMod)} (total of the questions)`}
+                          />
+                        ) : (
+                          <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="form-control"
+                            placeholder="50"
+                            title="Blank means 50. 0 means ungraded."
+                            value={currentMod.quiz_points ?? ""}
+                            onChange={e => updateCurrentMod('quiz_points', e.target.value === '' ? '' : Number(e.target.value))}
+                          />
+                        )}
+                      </div>
                     </div>
+
+                    <QuizQuestionsEditor
+                      questions={currentMod.quiz_questions || []}
+                      onChange={questions => updateCurrentMod('quiz_questions', questions)}
+                    />
+                    {(currentMod.quiz_questions || []).length > 0 && currentMod.quiz_url && (
+                      <p role="alert" style={{ color: '#b45309', fontSize: '0.78rem', marginTop: '8px' }}>
+                        This week has questions, so a new Google Form is made from them and the existing form link is not used.
+                      </p>
+                    )}
 
                     {currentMod.quiz_url && (
                       <div className="link-preview-box" style={{ marginTop: '10px' }}>
@@ -2841,6 +2732,7 @@ export default function App() {
                     <span className="item-pill-badge" style={{ background: 'rgba(6, 182, 212, 0.15)', color: '#06b6d4' }}>
                       Question
                     </span>
+                    {sectionClearButton('question')}
                     {openPanels.question ? <ChevronUp size={18} color="#94a3b8" /> : <ChevronDown size={18} color="#94a3b8" />}
                   </div>
                 </div>
@@ -2869,6 +2761,40 @@ export default function App() {
                           <option value="SHORT_ANSWER_QUESTION">Short Answer</option>
                           <option value="MULTIPLE_CHOICE_QUESTION">Multiple Choice</option>
                         </select>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: '16px', marginTop: '14px' }}>
+                      {currentMod.question_type === 'MULTIPLE_CHOICE_QUESTION' ? (
+                        <div>
+                          <label className="form-label">Choices (one per line)</label>
+                          <textarea
+                            rows={4}
+                            className="form-control"
+                            placeholder={"Type-1 runs directly on hardware\nType-2 runs on a host operating system"}
+                            value={(currentMod.question_choices || []).join('\n')}
+                            onChange={e => updateCurrentMod('question_choices', e.target.value.split('\n'))}
+                          />
+                          {currentMod.question_prompt && nonEmptyChoices(currentMod).length < 2 && (
+                            <p role="alert" style={{ color: '#ea4335', fontSize: '0.78rem', marginTop: '6px' }}>
+                              A multiple-choice question needs at least 2 choices.
+                            </p>
+                          )}
+                        </div>
+                      ) : <div />}
+
+                      <div>
+                        <label className="form-label">Question Points</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          className="form-control"
+                          placeholder="20"
+                          title="Blank means 20. 0 means ungraded."
+                          value={currentMod.question_points ?? ""}
+                          onChange={e => updateCurrentMod('question_points', e.target.value === '' ? '' : Number(e.target.value))}
+                        />
                       </div>
                     </div>
                   </div>
@@ -2961,10 +2887,6 @@ export default function App() {
                     <span>Save Spreadsheet (.xlsx)</span>
                   </button>
 
-                  <button className="btn-secondary" style={{ borderColor: 'rgba(52, 168, 83, 0.4)', color: '#34a853' }} onClick={() => setActiveTab('sync')}>
-                    <RefreshCw size={16} />
-                    <span>Update Existing Course</span>
-                  </button>
                 </div>
               </div>
             </div>
@@ -2976,484 +2898,7 @@ export default function App() {
         {/* ================================================================= */}
         {activeTab === 'courses' && (
           <div className="animate-fade-in">
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '24px' }}>
-              {courses.map((course) => (
-                <div key={course.id} className="glass-panel" style={{ padding: '24px', position: 'relative', overflow: 'hidden' }}>
-                  <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '4px', background: 'linear-gradient(90deg, #4285f4, #34a853)' }} />
-                  
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
-                    <div>
-                      <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '3px 8px', borderRadius: '4px', background: 'rgba(66, 133, 244, 0.15)', color: '#1e40af' }}>
-                        {course.section}
-                      </span>
-                      <h3 style={{ fontSize: '1.25rem', marginTop: '8px', color: 'var(--text-main)' }}>{course.name}</h3>
-                      <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>ID: <code>{course.id}</code></div>
-                    </div>
-
-                    <div style={{ textAlign: 'right' }}>
-                      <span style={{ fontSize: '0.72rem', color: '#34a853', fontWeight: 700, textTransform: 'uppercase', background: 'rgba(52, 168, 83, 0.15)', padding: '3px 8px', borderRadius: '4px' }}>
-                        ● {course.state}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', padding: '14px 0', borderTop: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)', margin: '16px 0' }}>
-                    <div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Enrollment Code</div>
-                      <div style={{ fontSize: '1rem', fontWeight: 700, color: '#fbbc05', fontFamily: 'JetBrains Mono' }}>
-                        {course.enrollmentCode}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Students</div>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>{course.studentsCount}</div>
-                    </div>
-
-                    <div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Curriculum</div>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>{course.topicsCount} Modules</div>
-                    </div>
-                  </div>
-
-                  <div style={{ marginBottom: '18px' }}>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '8px' }}>Module Topics:</div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      {(course.topics || []).slice(0, 3).map((top, tIdx) => (
-                        <div key={tIdx} style={{ fontSize: '0.82rem', padding: '6px 10px', background: 'rgba(255, 255, 255, 0.04)', borderRadius: '6px', color: '#cbd5e1' }}>
-                          📁 {top}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <button
-                      className="btn-secondary"
-                      style={{ flex: 1, padding: '8px', fontSize: '0.82rem', justifyContent: 'center' }}
-                      onClick={() => {
-                        setSelectedCourseForSync(course.id);
-                        setActiveTab('sync');
-                      }}
-                    >
-                      <RefreshCw size={14} />
-                      <span>Update Course</span>
-                    </button>
-
-                    <a
-                      href={`https://classroom.google.com/c/${course.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="btn-secondary"
-                      style={{ padding: '8px 12px', fontSize: '0.82rem', textDecoration: 'none' }}
-                      title="Open in Google Classroom"
-                    >
-                      <ExternalLink size={14} />
-                      <span>Open</span>
-                    </a>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================= */}
-        {/* TAB 3: NON-DESTRUCTIVE SAFE UPDATE */}
-        {/* ================================================================= */}
-        {activeTab === 'sync' && (
-          <div className="animate-fade-in">
-            <div className="glass-panel" style={{ padding: '28px', marginBottom: '28px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '20px' }}>
-                <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(66, 133, 244, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4285f4' }}>
-                  <RefreshCw size={22} />
-                </div>
-                <div>
-                  <h2 style={{ fontSize: '1.25rem', color: 'var(--text-main)' }}>Safe Non-Destructive Update to Google Classroom</h2>
-                  <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)' }}>
-                    Syncs current module topics, materials, assignments, quizzes, and questions without deleting existing classroom work.
-                  </p>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', marginBottom: '24px' }}>
-                <div>
-                  <label className="form-label">Select Target Classroom Course</label>
-                  <select
-                    className="form-control"
-                    value={selectedCourseForSync}
-                    onChange={e => setSelectedCourseForSync(e.target.value)}
-                  >
-                    {courses.map(c => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.section}) - ID: {c.id}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div style={{ background: 'rgba(52, 168, 83, 0.08)', border: '1px solid rgba(52, 168, 83, 0.25)', borderRadius: '12px', padding: '16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#34a853', fontWeight: 700, fontSize: '0.85rem', marginBottom: '6px' }}>
-                    <ShieldCheck size={18} />
-                    <span>Non-Destructive Guarantee</span>
-                  </div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                    Existing items are updated via <code>.patch()</code>. Missing items are created via <code>.create()</code>. No delete endpoints are ever called.
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <button className="btn-success" onClick={handleRunSync} disabled={isProcessing}>
-                  <RefreshCw size={16} />
-                  <span>{isProcessing ? "Updating Course..." : "Update Google Classroom Course"}</span>
-                </button>
-              </div>
-
-              {/* Execution Log */}
-              {syncLogs.length > 0 && (
-                <div style={{ marginTop: '28px', background: '#090d16', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '20px' }}>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#1e40af', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <Code2 size={16} />
-                    <span>API Execution Log (Live Sync Stream)</span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontFamily: 'JetBrains Mono', fontSize: '0.8rem' }}>
-                    {syncLogs.map((log, lIdx) => (
-                      <div key={lIdx} style={{ color: log.includes('COMPLETE') ? '#34a853' : log.includes('AUDIT') ? '#fbbc05' : '#cbd5e1' }}>
-                        {log}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================= */}
-        {/* TAB 4: SAFETY & API AUDIT */}
-        {/* ================================================================= */}
-        {activeTab === 'audit' && (
-          <div className="animate-fade-in">
-            <div className="glass-panel" style={{ padding: '28px', marginBottom: '28px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '20px' }}>
-                <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(52, 168, 83, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34a853' }}>
-                  <ShieldCheck size={22} />
-                </div>
-                <div>
-                  <h2 style={{ fontSize: '1.25rem', color: 'var(--text-main)' }}>Google Classroom Safety & API Rule Audit</h2>
-                  <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)' }}>
-                    Formal verification results verifying the NO-DELETE safety policy and presentation link specifications.
-                  </p>
-                </div>
-              </div>
-
-              {/* Audit Checklist */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '18px', marginBottom: '28px' }}>
-                <div style={{ background: 'rgba(52, 168, 83, 0.08)', border: '1px solid rgba(52, 168, 83, 0.3)', borderRadius: '12px', padding: '20px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#34a853', fontWeight: 700, marginBottom: '10px' }}>
-                    <CheckCircle2 size={20} />
-                    <span>NO-DELETE Policy: PASSED</span>
-                  </div>
-                  <div style={{ fontSize: '0.82rem', color: '#cbd5e1', lineHeight: 1.5 }}>
-                    AST static code scan verified: Zero calls to <code>courses.delete</code>, <code>topics.delete</code>, <code>courseWork.delete</code>, or <code>courseWorkMaterials.delete</code>.
-                  </div>
-                </div>
-
-                <div style={{ background: 'rgba(66, 133, 244, 0.08)', border: '1px solid rgba(66, 133, 244, 0.3)', borderRadius: '12px', padding: '20px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#1e40af', fontWeight: 700, marginBottom: '10px' }}>
-                    <CheckCircle2 size={20} />
-                    <span>Presentation Link Rule: PASSED</span>
-                  </div>
-                  <div style={{ fontSize: '0.82rem', color: '#cbd5e1', lineHeight: 1.5 }}>
-                    Materials payload schema verified: Strictly omits <code>title</code> inside <code>link</code> (output-only in Classroom API v1). Classroom renders preview card automatically.
-                  </div>
-                </div>
-              </div>
-
-              {/* Exact API JSON Payload Inspector */}
-              <div style={{ background: '#090d16', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '24px' }}>
-                <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Code2 size={18} color="#4285f4" />
-                  <span>Classroom API v1 Native Link Attachment Payload (Multiple Links Supported):</span>
-                </div>
-
-                <pre style={{ color: '#38bdf8', fontSize: '0.82rem', lineHeight: 1.5, overflowX: 'auto', background: 'rgba(0,0,0,0.5)', padding: '16px', borderRadius: '8px' }}>
-{JSON.stringify({
-  title: "Week 1: Foundations of Cloud Infrastructure - Lecture Materials",
-  description: "Presentation slides and documents for Week 1.",
-  materials: [
-    {
-      link: {
-        url: "https://docs.google.com/presentation/d/1demo-cloud-foundations-slides/edit"
-        // NOTICE: "title" is STRICTLY OMITTED here per Classroom API v1 specification!
-      }
-    },
-    {
-      link: {
-        url: "https://docs.google.com/document/d/1demo-cloud-architecture-whitepaper/edit"
-      }
-    }
-  ],
-  topicId: "topic-1",
-  state: "PUBLISHED"
-}, null, 2)}
-                </pre>
-              </div>
-
-              {/* Terminal CLI Command Helper */}
-              <div style={{ marginTop: '24px', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '20px' }}>
-                <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '10px' }}>
-                  CLI Automation Integration Commands:
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontFamily: 'JetBrains Mono', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  <div><code>.venv\Scripts\python classroom_course_engine.py --create --file course_curriculum.xlsx</code></div>
-                  <div><code>.venv\Scripts\python classroom_course_engine.py --sync --course-id mock-course-101 --file course_curriculum.xlsx</code></div>
-                  <div><code>.venv\Scripts\python classroom_course_engine.py --test</code></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ================================================================= */}
-        {/* TAB 5: LMS REGISTERED MEMBERS (STRIPE & FIREBASE) */}
-        {/* ================================================================= */}
-        {activeTab === 'lms-members' && (
-          <div className="animate-fade-in">
-            <div className="glass-panel" style={{ padding: '28px', marginBottom: '28px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px', flexWrap: 'wrap', gap: '14px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                  <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: 'rgba(99, 102, 241, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#818cf8' }}>
-                    <Users size={22} />
-                  </div>
-                  <div>
-                    <h2 style={{ fontSize: '1.25rem', color: 'var(--text-main)', margin: 0 }}>
-                      LMS Registered Members & Stripe Customers
-                    </h2>
-                    <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)', margin: '4px 0 0' }}>
-                      {isSuperAdmin ? (
-                        <>All records are tagged with <span style={{ color: '#a78bfa', fontWeight: 600 }}>'lms'</span> for shared cross-site usage in Firebase and Stripe.</>
-                      ) : (
-                        <>Directory of registered course members and client billing profiles.</>
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <button
-                    onClick={fetchLmsMembers}
-                    className="btn-secondary"
-                    style={{ padding: '8px 14px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
-                    title="Refresh database"
-                  >
-                    <RefreshCw size={14} className={loadingLmsMembers ? 'spin' : ''} />
-                    <span>Refresh</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setRegistrationModalView('agent');
-                      setShowRegistrationModal(true);
-                    }}
-                    className="btn-secondary"
-                    style={{ padding: '8px 14px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px', borderColor: 'rgba(129, 140, 248, 0.4)', color: '#c7d2fe' }}
-                    title="View agnostic AI Agent questionnaire & MCP Tool schema"
-                  >
-                    <Bot size={15} color="#818cf8" />
-                    <span>AI Agent & MCP Specs</span>
-                  </button>
-                  <button
-                    onClick={() => {
-                      setRegistrationModalView('form');
-                      setShowRegistrationModal(true);
-                    }}
-                    className="btn-primary"
-                    style={{ padding: '8px 16px', fontSize: '0.84rem', background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)', border: 'none', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', borderRadius: '8px' }}
-                  >
-                    <CreditCard size={15} />
-                    <span>Register New Member</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Status / Policy Summary Cards */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px', marginBottom: '24px' }}>
-                <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
-                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Members</div>
-                  <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#f8fafc', marginTop: '4px' }}>{lmsMembers.length}</div>
-                  <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: '4px' }}>Enrolled Clients & Students</div>
-                </div>
-
-                <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
-                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Billing Engine</div>
-                  <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#38bdf8', marginTop: '4px' }}>Stripe Verified</div>
-                  <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: '4px' }}>PCI-DSS Level 1 Secure</div>
-                </div>
-
-                {/* Internal cards: only visible to superadmin */}
-                {isSuperAdmin && (
-                  <>
-                    <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
-                      <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Shared System Tag</div>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#a78bfa', marginTop: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <Tag size={18} />
-                        <span>lms</span>
-                      </div>
-                      <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: '4px' }}>Cross-app Firebase & Stripe index</div>
-                    </div>
-
-                    <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--border-color)', borderRadius: '12px', padding: '16px' }}>
-                      <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Invoice Prefix & Review</div>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#34a853', marginTop: '4px' }}>LMS (Draft Policy)</div>
-                      <div style={{ fontSize: '0.74rem', color: '#94a3b8', marginTop: '4px' }}>30-day payment terms</div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Members Table */}
-              {lmsMembers.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '48px 20px', background: 'rgba(255, 255, 255, 0.01)', border: '1px dashed var(--border-color)', borderRadius: '12px' }}>
-                  <Users size={36} color="#64748b" style={{ margin: '0 auto 12px' }} />
-                  <div style={{ fontSize: '1rem', fontWeight: 600, color: '#cbd5e1', marginBottom: '6px' }}>
-                    No LMS Members Registered Yet
-                  </div>
-                  <p style={{ fontSize: '0.82rem', color: '#94a3b8', maxWidth: '400px', margin: '0 auto 18px' }}>
-                    {isSuperAdmin
-                      ? "Click \"Register New Member\" to create your first customer in Stripe and synchronize them to Firebase with tag 'lms'."
-                      : "Click \"Register New Member\" to create your client billing account."}
-                  </p>
-                  <button
-                    onClick={() => setShowRegistrationModal(true)}
-                    className="btn-primary"
-                    style={{ padding: '8px 20px', background: '#6366f1', border: 'none', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontSize: '0.85rem' }}
-                  >
-                    Open Registration Form
-                  </button>
-                </div>
-              ) : (
-                <div style={{ overflowX: 'auto', border: '1px solid var(--border-color)', borderRadius: '12px', background: '#0b0f19' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.83rem', textAlign: 'left' }}>
-                    <thead>
-                      <tr style={{ background: 'rgba(255, 255, 255, 0.03)', borderBottom: '1px solid var(--border-color)' }}>
-                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Member / Organization</th>
-                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Email & Phone</th>
-                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Role</th>
-                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Client ID</th>
-                        <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Billing Location</th>
-                        {isSuperAdmin && (
-                          <th style={{ padding: '12px 16px', color: '#94a3b8', fontWeight: 600 }}>Database Tag</th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {lmsMembers.map((m, idx) => (
-                        <tr key={idx} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)' }}>
-                          <td style={{ padding: '12px 16px' }}>
-                            <div style={{ fontWeight: 600, color: '#f8fafc' }}>
-                              {m.account_type === 'organization' ? m.business_name : m.name}
-                            </div>
-                            {m.account_type === 'organization' && m.name && (
-                              <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>Contact: {m.name}</div>
-                            )}
-                            {(m.date_of_birth || m.education_history) && (
-                              <div style={{ marginTop: '5px', fontSize: '0.72rem', display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                                {m.date_of_birth && (
-                                  <span style={{ 
-                                    background: 'rgba(56, 189, 248, 0.1)', 
-                                    border: '1px solid rgba(56, 189, 248, 0.25)', 
-                                    color: '#38bdf8', 
-                                    padding: '1px 6px', 
-                                    borderRadius: '4px' 
-                                  }}>
-                                    DoB: {m.date_of_birth}
-                                  </span>
-                                )}
-                                {(m.education_history?.highest_level || m.education_history?.field_of_study) && (
-                                  <span style={{ 
-                                    background: 'rgba(168, 85, 247, 0.1)', 
-                                    border: '1px solid rgba(168, 85, 247, 0.25)', 
-                                    color: '#c084fc', 
-                                    padding: '1px 6px', 
-                                    borderRadius: '4px' 
-                                  }}>
-                                    Edu: {m.education_history.highest_level || 'Enrolled'}{m.education_history.field_of_study ? ` (${m.education_history.field_of_study})` : ''}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                          <td style={{ padding: '12px 16px' }}>
-                            <div style={{ color: '#cbd5e1' }}>{m.email}</div>
-                            {m.phone && <div style={{ fontSize: '0.74rem', color: '#94a3b8' }}>{m.phone}</div>}
-                          </td>
-                          <td style={{ padding: '12px 16px' }}>
-                            {isSuperAdmin ? (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <select
-                                  value={m.role || m.classification || "Supporter"}
-                                  onChange={(e) => handleRoleChange(m.uid || m.id, e.target.value)}
-                                  style={{
-                                    background: '#0f172a',
-                                    color: '#e2e8f0',
-                                    border: '1px solid rgba(99, 102, 241, 0.45)',
-                                    borderRadius: '6px',
-                                    padding: '5px 8px',
-                                    fontSize: '0.76rem',
-                                    fontWeight: 600,
-                                    cursor: 'pointer',
-                                    outline: 'none'
-                                  }}
-                                  title="Change member classification in Firebase"
-                                >
-                                  {USER_CATEGORIES.map(cat => (
-                                    <option key={cat} value={cat} style={{ background: '#0f172a', color: '#fff' }}>
-                                      {cat}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                            ) : (
-                              <span style={{
-                                padding: '3px 9px',
-                                borderRadius: '6px',
-                                fontSize: '0.72rem',
-                                fontWeight: 600,
-                                background: m.role === 'Superadmin' ? 'rgba(168, 85, 247, 0.2)' : m.role === 'Supporter' ? 'rgba(52, 168, 83, 0.15)' : 'rgba(66, 133, 244, 0.15)',
-                                color: m.role === 'Superadmin' ? '#c084fc' : m.role === 'Supporter' ? '#4ade80' : '#60a5fa'
-                              }}>
-                                {m.role || m.classification || 'Supporter'}
-                              </span>
-                            )}
-                          </td>
-                          <td style={{ padding: '12px 16px', fontFamily: 'monospace', color: '#818cf8', fontSize: '0.78rem' }}>
-                            {m.stripe_customer_id}
-                          </td>
-                          <td style={{ padding: '12px 16px', color: '#94a3b8', fontSize: '0.78rem' }}>
-                            {m.address?.city ? `${m.address.city}, ${m.address.country || 'AU'}` : 'Global'}
-                          </td>
-                          {isSuperAdmin && (
-                            <td style={{ padding: '12px 16px' }}>
-                              <span style={{
-                                background: 'rgba(139, 92, 246, 0.2)',
-                                color: '#c084fc',
-                                padding: '2px 8px',
-                                borderRadius: '6px',
-                                fontSize: '0.72rem',
-                                fontWeight: 700
-                              }}>
-                                lms
-                              </span>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+            <ClassroomEnvironment user={currentUser} onImportCourse={applyImportedCourse} />
           </div>
         )}
 

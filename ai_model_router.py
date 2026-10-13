@@ -1,183 +1,80 @@
 """
-Standard AI Model Router Service for Google Course Builder.
-Implements dynamic model routing across Gemini 3 tiers:
-- gemini-3.1-pro: Multi-step pedagogical reasoning, curriculum generation
-- gemini-3.8-flash (Default): Orchestration, MCP tools, conversational assistants, live streaming
-- gemini-3.5-flash-lite: High-volume batch spreadsheet parsing, text processing, initial classification
+Gemini client for Google Course Builder.
+
+Every AI call in the app uses one low-cost model. Cost is the priority, so there
+is no per-task model routing and no reasoning tier.
 """
 
 import os
+import json
 import logging
-from enum import Enum
-from typing import Optional, Dict, Any, Generator, Union
-from dataclasses import dataclass
+from typing import Optional, Any
 
-# Configure structured logging
 logger = logging.getLogger("model_router")
 if not logger.handlers:
     handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "[%(asctime)s] [%(levelname)s] [AI_ROUTER] %(message)s"
-    )
-    handler.setFormatter(formatter)
+    handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] [AI] %(message)s"))
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
 
-
-class ModelTier:
-    """Canonical model identifiers for Gemini 3 family."""
-    REASONING = "gemini-3.1-pro"
-    ORCHESTRATION = "gemini-3.8-flash"
-    HIGH_VOLUME = "gemini-3.5-flash-lite"
-    DEFAULT = "gemini-3.8-flash"
+# Low-cost Gemini model used for every AI feature in the app.
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+API_KEY_ENV_VAR = "GEMINI_API_KEY"
 
 
-class TaskCategory(str, Enum):
-    """Supported task assignments for dynamic routing."""
-    ANALYTICAL_REASONING = "analytical_reasoning"
-    CONVERSATIONAL_ORCHESTRATION = "conversational_orchestration"
-    HIGH_VOLUME_PROCESSING = "high_volume_processing"
-    DEFAULT = "default"
+class GeminiClient:
+    """Thin wrapper over the google-genai SDK for the single low-cost model."""
 
-
-# Canonical task-to-model mapping matrix
-TASK_MODEL_MAPPING: Dict[TaskCategory, str] = {
-    TaskCategory.ANALYTICAL_REASONING: ModelTier.REASONING,
-    TaskCategory.CONVERSATIONAL_ORCHESTRATION: ModelTier.ORCHESTRATION,
-    TaskCategory.HIGH_VOLUME_PROCESSING: ModelTier.HIGH_VOLUME,
-    TaskCategory.DEFAULT: ModelTier.DEFAULT,
-}
-
-
-@dataclass
-class RouterConfig:
-    """Configuration options for model router behavior."""
-    default_model: str = ModelTier.DEFAULT
-    fallback_model: str = ModelTier.DEFAULT
-    allow_fallback: bool = True
-    api_key_env_var: str = "GEMINI_API_KEY"
-
-
-class ModelRouter:
-    """
-    Centralized router for dynamic Gemini model selection, resilient
-    execution, and quota fallback handling.
-    """
-
-    def __init__(self, config: Optional[RouterConfig] = None):
-        self.config = config or RouterConfig()
+    def __init__(self, model: str = GEMINI_MODEL):
+        self.model = model
         self._client = None
 
     def get_client(self):
-        """Lazy-initializes and returns the official google-genai Client."""
         if self._client is None:
             try:
                 from google import genai
             except ImportError as exc:
                 raise ImportError(
-                    "The 'google-genai' SDK is required. Run: pip install 'google-genai>=2.25.0'"
+                    "The 'google-genai' SDK is required. Run: pip install -r requirements.txt"
                 ) from exc
 
-            api_key = os.environ.get(self.config.api_key_env_var)
-            if api_key:
-                self._client = genai.Client(api_key=api_key)
-            else:
-                # Falls back to Application Default Credentials or environment
-                self._client = genai.Client()
+            api_key = os.environ.get(API_KEY_ENV_VAR)
+            if not api_key:
+                raise RuntimeError(f"{API_KEY_ENV_VAR} is not set in .env")
+            self._client = genai.Client(api_key=api_key)
         return self._client
 
-    def resolve_model(
-        self,
-        task_category: Union[TaskCategory, str],
-        model_override: Optional[str] = None
-    ) -> str:
-        """
-        Determines the appropriate model name based on task category or explicit override.
-        """
-        if model_override:
-            logger.info("Using explicit model override: %s", model_override)
-            return model_override
+    def generate_text(self, prompt: str, system_instruction: Optional[str] = None,
+                      json_output: bool = False, temperature: float = 0.4) -> str:
+        """Send one prompt and return the response text."""
+        from google.genai import types
 
-        if isinstance(task_category, str):
-            try:
-                task_category = TaskCategory(task_category)
-            except ValueError:
-                logger.warning(
-                    "Unknown task category '%s'. Falling back to default %s",
-                    task_category,
-                    self.config.default_model
-                )
-                return self.config.default_model
+        config_args: dict[str, Any] = {"temperature": temperature}
+        if system_instruction:
+            config_args["system_instruction"] = system_instruction
+        if json_output:
+            config_args["response_mime_type"] = "application/json"
 
-        resolved = TASK_MODEL_MAPPING.get(task_category, self.config.default_model)
-        logger.debug("Task '%s' routed to model '%s'", task_category.value, resolved)
-        return resolved
+        logger.info("Calling %s (json=%s)", self.model, json_output)
+        response = self.get_client().models.generate_content(
+            model=self.model,
+            contents=prompt,
+            config=types.GenerateContentConfig(**config_args),
+        )
+        return response.text or ""
 
-    def execute_interaction(
-        self,
-        task_category: Union[TaskCategory, str],
-        user_input: Any,
-        model_override: Optional[str] = None,
-        stream: bool = False,
-        **kwargs
-    ) -> Any:
-        """
-        Executes an interaction with automatic quota / rate-limit fallback.
-        
-        Args:
-            task_category: The task category governing model selection.
-            user_input: Prompt string or structured interaction payload.
-            model_override: Optional model string override.
-            stream: Whether to stream server-sent interaction events.
-            **kwargs: Extra parameters passed to client.interactions.create
-                     (e.g., tools, system_instruction, previous_interaction_id).
-                     
-        Returns:
-            Interaction response object, or an event generator if stream=True.
-        """
-        client = self.get_client()
-        target_model = self.resolve_model(task_category, model_override)
-
-        try:
-            logger.info("Executing interaction with %s (stream=%s)", target_model, stream)
-            return client.interactions.create(
-                model=target_model,
-                input=user_input,
-                stream=stream,
-                **kwargs
-            )
-        except Exception as exc:
-            # Check if fallback is permitted and we didn't already use the fallback model
-            is_quota_or_transient = any(
-                code in str(exc).lower()
-                for code in ["429", "resource_exhausted", "quota", "rate limit", "503", "unavailable", "timeout"]
-            )
-
-            if self.config.allow_fallback and target_model != self.config.fallback_model and is_quota_or_transient:
-                logger.warning(
-                    "Model %s failed with transient error (%s). Falling back to %s",
-                    target_model,
-                    exc,
-                    self.config.fallback_model
-                )
-                return client.interactions.create(
-                    model=self.config.fallback_model,
-                    input=user_input,
-                    stream=stream,
-                    **kwargs
-                )
-            # Otherwise re-raise
-            logger.error("Interaction failed on model %s: %s", target_model, exc)
-            raise
+    def generate_json(self, prompt: str, system_instruction: Optional[str] = None) -> Any:
+        """Send a prompt that must return JSON and return the parsed object."""
+        text = self.generate_text(prompt, system_instruction=system_instruction, json_output=True)
+        return json.loads(text)
 
 
-# Global singleton instance & factory
-_ROUTER_INSTANCE: Optional[ModelRouter] = None
+_CLIENT: Optional[GeminiClient] = None
 
 
-def get_model_router(config: Optional[RouterConfig] = None) -> ModelRouter:
-    """Factory function returning the singleton ModelRouter instance."""
-    global _ROUTER_INSTANCE
-    if _ROUTER_INSTANCE is None:
-        _ROUTER_INSTANCE = ModelRouter(config)
-    return _ROUTER_INSTANCE
+def get_gemini_client() -> GeminiClient:
+    """Return the shared client."""
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = GeminiClient()
+    return _CLIENT

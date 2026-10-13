@@ -105,14 +105,14 @@ class TestClassroomCourseEngine(unittest.TestCase):
         self.assertTrue(course["id"].startswith("mock-course-"))
         self.assertEqual(len(result["topics"]), 4)
         self.assertEqual(len(result["materials"]), 4)
-        self.assertEqual(len(result["coursework"]), 4)
+        self.assertEqual(len(result["coursework"]), 12)  # assignment, quiz, question x 4 weeks
 
-        # Verify presentation links in materials
+        # The sample's Google Slides links are attached as Drive files, by file ID
         for mat in result["materials"]:
             self.assertEqual(len(mat["materials"]), 1)
-            link_obj = mat["materials"][0]["link"]
-            self.assertIn("url", link_obj)
-            self.assertNotIn("title", link_obj)
+            drive = mat["materials"][0]["driveFile"]
+            self.assertTrue(drive["driveFile"]["id"])
+            self.assertEqual(drive["shareMode"], "VIEW")
 
     def test_07_sync_existing_course_non_destructive(self):
         """Tests Action 2: Non-Destructive Edit/Sync."""
@@ -126,7 +126,7 @@ class TestClassroomCourseEngine(unittest.TestCase):
         # Verify nothing was deleted
         cw_count = len(service.courses().courseWork().list(courseId=cid).execute().get("courseWork", []))
         mat_count = len(service.courses().courseWorkMaterials().list(courseId=cid).execute().get("courseWorkMaterial", []))
-        self.assertEqual(cw_count, 4)
+        self.assertEqual(cw_count, 12)
         self.assertEqual(mat_count, 4)
 
     def test_08_duplicate_course_to_new_section(self):
@@ -142,12 +142,11 @@ class TestClassroomCourseEngine(unittest.TestCase):
 
         self.assertEqual(len(dup_res["cloned_topics"]), 4)
         self.assertEqual(len(dup_res["cloned_materials"]), 4)
-        self.assertEqual(len(dup_res["cloned_coursework"]), 4)
+        self.assertEqual(len(dup_res["cloned_coursework"]), 12)
 
-        # Check links preserved
-        for cl_mat in dup_res["cloned_materials"]:
-            self.assertGreaterEqual(len(cl_mat["materials"]), 1)
-            self.assertNotIn("title", cl_mat["materials"][0]["link"])
+        # Attachments are copied with their type: the Drive files stay Drive files
+        for cl_mat, src_mat in zip(dup_res["cloned_materials"], create_res["materials"]):
+            self.assertEqual(cl_mat["materials"], src_mat["materials"])
 
     def test_09_list_courses_status_check(self):
         """Tests Action 4: Course list and roster metrics."""
@@ -157,7 +156,7 @@ class TestClassroomCourseEngine(unittest.TestCase):
 
         self.assertEqual(len(courses), 1)
         self.assertEqual(courses[0]["name"], "CS101: Introduction to Cloud Computing")
-        self.assertEqual(courses[0]["coursework_count"], 4)
+        self.assertEqual(courses[0]["coursework_count"], 12)
         self.assertEqual(courses[0]["materials_count"], 4)
 
 
