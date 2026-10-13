@@ -107,7 +107,7 @@ function PostRow({ item, kind, topics, hasRubric, save }) {
   ].filter(Boolean).join(' · ');
 
   return (
-    <div style={rowStyle}>
+    <article aria-label={item.title} style={rowStyle}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
         <div style={{ minWidth: 0 }}>
           <div style={muted}>{kind === 'material' ? 'Material' : kindLabel(item)}{meta ? ` · ${meta}` : ''}</div>
@@ -195,7 +195,7 @@ function PostRow({ item, kind, topics, hasRubric, save }) {
           </div>
         </div>
       )}
-    </div>
+    </article>
   );
 }
 
@@ -416,7 +416,7 @@ export default function CourseEditor({ courseId, onCourseChanged }) {
             </label>
           ))}
           <label className="form-label" style={{ margin: 0 }}>Status
-            <select className="form-control" value={details.courseState || 'ACTIVE'} onChange={(e) => setDetails({ ...details, courseState: e.target.value })}>
+            <select className="form-control" aria-label="Course status" value={details.courseState || 'ACTIVE'} onChange={(e) => setDetails({ ...details, courseState: e.target.value })}>
               <option value="ACTIVE">Active</option>
               <option value="ARCHIVED">Archived (hidden from students' class list; can be restored)</option>
             </select>
@@ -441,7 +441,7 @@ export default function CourseEditor({ courseId, onCourseChanged }) {
           const work = data.courseWork.filter((w) => (w.topicId || '') === id);
           if (!topic && materials.length === 0 && work.length === 0) return null;
           return (
-            <div key={id || 'none'} style={{ display: 'grid', gap: 8 }}>
+            <div key={id || 'none'} role="group" aria-label={topic ? topic.name : 'No topic'} style={{ display: 'grid', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border-color)', paddingBottom: 4 }}>
                 {topic && renaming === id ? (
                   <div style={{ flex: 1, display: 'flex', gap: 8, alignItems: 'flex-start' }}>

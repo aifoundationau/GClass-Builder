@@ -1566,11 +1566,11 @@ export default function App() {
           <div>
             <h1 className="page-title">
               {activeTab === 'studio' && "Course Studio & Weekly Modules"}
-              {activeTab === 'courses' && "Active Classroom Courses"}
+              {activeTab === 'courses' && "Classroom Courses"}
             </h1>
             <p className="page-desc">
               {activeTab === 'studio' && "Step through one module at a time. All panels are collapsible dropdowns to maximize workspace."}
-              {activeTab === 'courses' && "Your Google Classroom courses, shown with the same stream, classwork, and people layout."}
+              {activeTab === 'courses' && "Edit your Google Classroom courses after they are created: course details, topics, classwork and announcements."}
             </p>
           </div>
 
@@ -2652,6 +2652,7 @@ export default function App() {
                         <input
                           type="url"
                           className="form-control"
+                          aria-label="Existing Google Form (optional)"
                           placeholder="https://docs.google.com/forms/d/.../viewform"
                           value={currentMod.quiz_url || ""}
                           disabled={(currentMod.quiz_questions || []).length > 0}

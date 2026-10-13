@@ -457,11 +457,11 @@ class MockCoursesEndpoint:
                 return record
         return Request(self._store, body)
 
-    def list(self, courseStates=None, pageSize=100):
+    def list(self, courseStates=None, pageSize=100, **_filters):
         class Request:
             def __init__(self, store, courseStates):
                 self.store = store
-                self.states = courseStates or ["ACTIVE"]
+                self.states = courseStates  # like Classroom, no filter means every state
 
             def execute(self):
                 items = [
