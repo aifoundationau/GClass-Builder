@@ -498,6 +498,8 @@ class MockCoursesEndpoint:
                 for field in self.mask:
                     if field in self.body:
                         course[field] = self.body[field]
+                    else:  # named in the mask without a value: Classroom clears it
+                        course.pop(field, None)
                 return course
         return Request(self._store, id, updateMask, body)
 
@@ -596,7 +598,7 @@ class MockTopicsEndpoint:
                 return record
         return Request(self._store, courseId, body)
 
-    def list(self, courseId: str, pageSize=100):
+    def list(self, courseId: str, pageSize=100, **_filters):
         class Request:
             def __init__(self, store, cid):
                 self.store = store
@@ -620,9 +622,13 @@ class MockTopicsEndpoint:
                 topic = self.store["topics"].get(self.cid, {}).get(self.tid)
                 if not topic:
                     raise HttpError(resp=None, content=b"Topic not found")
+                if topic.get("associatedWithDeveloper") is False:
+                    raise _mock_http_error(403, "@ProjectPermissionDenied The Developer Project is not permitted to make the request.")
                 for field in self.mask:
                     if field in self.body:
                         topic[field] = self.body[field]
+                    else:  # named in the mask without a value: Classroom clears it
+                        topic.pop(field, None)
                 return topic
         return Request(self._store, courseId, id, updateMask, body)
 
@@ -663,7 +669,7 @@ class MockMaterialsEndpoint:
                 return record
         return Request(self._store, courseId, body)
 
-    def list(self, courseId: str, pageSize=100):
+    def list(self, courseId: str, pageSize=100, **_filters):
         class Request:
             def __init__(self, store, cid):
                 self.store = store
@@ -687,9 +693,13 @@ class MockMaterialsEndpoint:
                 mat = self.store["materials"].get(self.cid, {}).get(self.mid)
                 if not mat:
                     raise HttpError(resp=None, content=b"Material not found")
+                if mat.get("associatedWithDeveloper") is False:
+                    raise _mock_http_error(403, "@ProjectPermissionDenied The Developer Project is not permitted to make the request.")
                 for field in self.mask:
                     if field in self.body:
                         mat[field] = self.body[field]
+                    else:  # named in the mask without a value: Classroom clears it
+                        mat.pop(field, None)
                 return mat
         return Request(self._store, courseId, id, updateMask, body)
 
@@ -735,6 +745,7 @@ class MockCourseWorkEndpoint:
                     "dueDate": self.body.get("dueDate"),
                     "dueTime": self.body.get("dueTime"),
                     "alternateLink": f"https://classroom.google.com/cw/{wid}",
+                    "associatedWithDeveloper": True,
                 }
                 if mcq:
                     record["multipleChoiceQuestion"] = mcq
@@ -742,7 +753,7 @@ class MockCourseWorkEndpoint:
                 return record
         return Request(self._store, courseId, body)
 
-    def list(self, courseId: str, pageSize=100):
+    def list(self, courseId: str, pageSize=100, **_filters):
         class Request:
             def __init__(self, store, cid):
                 self.store = store
@@ -766,9 +777,13 @@ class MockCourseWorkEndpoint:
                 cw = self.store["coursework"].get(self.cid, {}).get(self.wid)
                 if not cw:
                     raise HttpError(resp=None, content=b"CourseWork not found")
+                if cw.get("associatedWithDeveloper") is False:
+                    raise _mock_http_error(403, "@ProjectPermissionDenied The Developer Project is not permitted to make the request.")
                 for field in self.mask:
                     if field in self.body:
                         cw[field] = self.body[field]
+                    else:  # named in the mask without a value: Classroom clears it
+                        cw.pop(field, None)
                 return cw
         return Request(self._store, courseId, id, updateMask, body)
 
@@ -796,6 +811,15 @@ class MockRubricsEndpoint:
                           **body}
                 rubrics[courseWorkId] = record
                 return record
+        return Request()
+
+    def list(self, courseId: str, courseWorkId: str, **_filters):
+        store = self._store
+
+        class Request:
+            def execute(self):
+                found = store.get("rubrics", {}).get(courseId, {}).get(courseWorkId)
+                return {"rubrics": [found] if found else []}
         return Request()
 
 
@@ -895,7 +919,7 @@ class MockAnnouncementsEndpoint:
                 return record
         return Request(self._store, courseId, body)
 
-    def list(self, courseId: str, pageSize=100):
+    def list(self, courseId: str, pageSize=100, **_filters):
         class Request:
             def __init__(self, store, cid):
                 self.store = store
@@ -905,6 +929,24 @@ class MockAnnouncementsEndpoint:
                 items = self.store["announcements"].get(self.cid, [])
                 return {"announcements": items}
         return Request(self._store, courseId)
+
+    def patch(self, courseId: str, id: str, updateMask: str, body: Dict[str, Any]):
+        store = self._store
+
+        class Request:
+            def execute(self):
+                post = next((a for a in store["announcements"].get(courseId, []) if a["id"] == id), None)
+                if not post:
+                    raise _mock_http_error(404, "Announcement not found")
+                if post.get("associatedWithDeveloper") is False:
+                    raise _mock_http_error(403, "@ProjectPermissionDenied The Developer Project is not permitted to make the request.")
+                for field in [m.strip() for m in updateMask.split(",") if m.strip()]:
+                    if field in body:
+                        post[field] = body[field]
+                    else:
+                        post.pop(field, None)
+                return post
+        return Request()
 
 
 class MockTeachersEndpoint:
@@ -937,7 +979,7 @@ class MockTeachersEndpoint:
                 return record
         return Request(self._store, courseId, body)
 
-    def list(self, courseId: str, pageSize=100):
+    def list(self, courseId: str, pageSize=100, **_filters):
         class Request:
             def __init__(self, store, cid):
                 self.store = store
@@ -979,7 +1021,7 @@ class MockStudentsEndpoint:
                 return record
         return Request(self._store, courseId, body)
 
-    def list(self, courseId: str, pageSize=100):
+    def list(self, courseId: str, pageSize=100, **_filters):
         class Request:
             def __init__(self, store, cid):
                 self.store = store

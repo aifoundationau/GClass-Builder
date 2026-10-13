@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import classroom_api
 import course_agent
 import course_developer
+import course_editor
 import teacher_auth
 from course_agent import AgentError
 from classroom_api import ClassroomCallError
@@ -224,6 +225,10 @@ def handle_get(handler, path: str) -> bool:
                 raise ValueError("Missing course id.")
             service = _teacher_service(handler)
             handler._send_json(200, course_agent.read_course_snapshot(service, course_id))
+        elif path == "/api/classroom/editor":
+            # Everything the course editor shows, drafts included
+            course_id = _query(handler).get("id", [""])[0]
+            handler._send_json(200, course_editor.load_course(_teacher_service(handler), course_id))
         else:
             return False
     except Exception as exc:
@@ -291,6 +296,9 @@ def handle_post(handler, path: str) -> bool:
             handler.send_header("Content-Length", str(len(body)))
             handler.end_headers()
             handler.wfile.write(body)
+        elif path == "/api/classroom/edit":
+            # One change from the course editor: update a field or add an item. Never deletes.
+            handler._send_json(200, course_editor.apply_edit(_teacher_service(handler), handler._read_json_body()))
         elif path == "/api/agent/plan":
             body = handler._read_json_body()
             files = [(f["name"], base64.b64decode(f["data"])) for f in body.get("files", [])]
