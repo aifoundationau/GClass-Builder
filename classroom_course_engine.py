@@ -2501,15 +2501,17 @@ def sync_existing_course(
     if verbose:
         print(f"[OK] Synced course metadata for '{updated_course.get('name')}'")
 
-    # 2. Retrieve existing topics, materials, and coursework
-    existing_topics_resp = service.courses().topics().list(courseId=course_id).execute()
-    existing_topics = {t["name"].strip(): t for t in existing_topics_resp.get("topic", [])}
-
-    existing_mat_resp = service.courses().courseWorkMaterials().list(courseId=course_id).execute()
-    existing_materials = {m.get("title", "").strip(): m for m in existing_mat_resp.get("courseWorkMaterial", [])}
-
-    existing_cw_resp = service.courses().courseWork().list(courseId=course_id).execute()
-    existing_coursework = {cw.get("title", "").strip(): cw for cw in existing_cw_resp.get("courseWork", [])}
+    # 2. Retrieve existing topics, materials, and coursework: every page, drafts included, so an
+    #    item that is already there is updated instead of being created a second time
+    import classroom_api
+    states = ["PUBLISHED", "DRAFT"]
+    existing_topics = {t["name"].strip(): t for t in
+                       classroom_api.list_all(service, "courses.topics", "topic", {"courseId": course_id})}
+    existing_materials = {m.get("title", "").strip(): m for m in classroom_api.list_all(
+        service, "courses.courseWorkMaterials", "courseWorkMaterial",
+        {"courseId": course_id, "courseWorkMaterialStates": states})}
+    existing_coursework = {cw.get("title", "").strip(): cw for cw in classroom_api.list_all(
+        service, "courses.courseWork", "courseWork", {"courseId": course_id, "courseWorkStates": states})}
 
     synced_topics_count = 0
     synced_materials_count = 0

@@ -96,7 +96,12 @@ def load_credentials(email: str):
     data.pop("scopes", None)
     creds = Credentials.from_authorized_user_info(data)
     if not creds.valid and creds.refresh_token:
-        creds.refresh(Request())
+        from google.auth.exceptions import RefreshError
+        try:
+            creds.refresh(Request())
+        except RefreshError:
+            # Access revoked or the refresh token expired: the teacher must sign in again (a 401, not a 500)
+            return None
         save_credentials(email, creds.to_json())
     return creds if creds.valid else None
 

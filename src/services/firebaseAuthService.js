@@ -172,6 +172,12 @@ export async function syncUserToFirebase(authUser) {
 
 // Unbreakable Google Sign-In with fallback resilience
 export async function signInWithGoogle() {
+  if (!isFirebaseConfigured) {
+    // The placeholder config has no valid API key, so Google would only return an error
+    const error = new Error("Firebase is not configured (VITE_FIREBASE_API_KEY).");
+    error.code = "auth/not-configured";
+    throw error;
+  }
   try {
     // Attempt popup sign in first
     const result = await signInWithPopup(auth, googleProvider);
@@ -196,6 +202,7 @@ export async function signInWithGoogle() {
 
 // Check redirect login result (for mobile or redirected flows)
 export async function checkRedirectAuthResult() {
+  if (!isFirebaseConfigured) return null;
   try {
     const result = await getRedirectResult(auth);
     if (result && result.user) {

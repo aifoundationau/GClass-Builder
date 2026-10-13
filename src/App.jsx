@@ -7,7 +7,6 @@ import {
   GraduationCap,
   BookOpen,
   PlusCircle,
-  RefreshCw,
   ShieldCheck,
   CheckCircle2,
   FileSpreadsheet,
@@ -18,13 +17,9 @@ import {
   Layers,
   FileText,
   ExternalLink,
-  Code2,
   Play,
-  Server,
   LogOut,
-  LogIn,
   Mail,
-  User,
   School,
   ChevronLeft,
   ChevronRight,
@@ -37,10 +32,7 @@ import {
   Plus,
   Compass,
   ArrowRight,
-  X,
-  CreditCard,
-  Tag,
-  Bot
+  X
 } from 'lucide-react';
 import RegistrationModal from './components/RegistrationModal';
 import ClassroomEnvironment from './components/ClassroomEnvironment';
@@ -68,8 +60,17 @@ import {
   getAllUsersFromFirebase, 
   updateUserCategoryInFirebase, 
   USER_CATEGORIES, 
-  checkRedirectAuthResult 
+  checkRedirectAuthResult
 } from './services/firebaseAuthService';
+import { isFirebaseConfigured } from './firebase';
+
+// Course points as the server reads them: blank means the default, 0 means ungraded.
+const pointsOr = (value, fallback) => (value === '' || value == null || Number.isNaN(Number(value)) ? fallback : Number(value));
+// Every graded post a week creates, with the server's defaults (assignment 100, quiz 50 or the
+// total of its questions, question 20).
+const weekPoints = (mod) => (mod.assignment_title ? pointsOr(mod.points, 100) : 0)
+  + ((mod.quiz_questions || []).length ? quizTotalPoints(mod) : (mod.quiz_title || mod.quiz_url ? pointsOr(mod.quiz_points, 50) : 0))
+  + (mod.question_prompt ? pointsOr(mod.question_points, 20) : 0);
 
 const SAMPLE_PRESETS = {
   cloud: {
@@ -235,7 +236,15 @@ const SAMPLE_EMAILS = new Set(
 );
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(null);
+  // Two sign-ins. classroomUser is the server's Google sign-in (/api/auth/me): the server keeps the
+  // teacher's Classroom token and every Classroom call uses it, so it decides who is logged in.
+  // firebaseProfile is the optional Firebase LMS profile (classification, superadmin); it only adds
+  // those fields, and only when it is the same Google account.
+  const [classroomUser, setClassroomUser] = useState(null);
+  const [firebaseProfile, setFirebaseProfile] = useState(null);
+  const sameAccount = Boolean(classroomUser && firebaseProfile
+    && String(classroomUser.email || '').toLowerCase() === String(firebaseProfile.email || '').toLowerCase());
+  const currentUser = classroomUser ? { ...(sameAccount ? firebaseProfile : {}), ...classroomUser } : null;
   // Dynamic Superadmin from Firebase (Zero Hardcoding)
   const isSuperAdmin = Boolean(currentUser?.isSuperAdmin);
 
@@ -447,16 +456,8 @@ export default function App() {
     showToast(`Downloaded student roster "${fileName}"!`);
   };
 
-  // Real-time backend states
-  const [backendStatus, setBackendStatus] = useState({
-    online: false,
-    no_delete_policy_enforced: true,
-  });
-
   const [courses, setCourses] = useState([]);
   const [toastMessage, setToastMessage] = useState(null);
-  const [selectedCourseForSync, setSelectedCourseForSync] = useState("");
-  const [syncLogs, setSyncLogs] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [deployProgress, setDeployProgress] = useState(null);
 
@@ -465,80 +466,57 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  // Check auth and fetch initial courses
-  const checkAuthAndFetchData = async () => {
+  // Classroom access comes from the server's Google sign-in, which stores the teacher's token.
+  const connectClassroom = () => { window.location.href = '/api/auth/google_login'; };
+
+  // Who is signed in to Classroom (cheap: the server reads its own session file)
+  const refreshSession = async () => {
     try {
-      // 1. Check Auth from backend API
       const authRes = await fetch('/api/auth/me');
-      if (authRes.ok) {
-        const user = await authRes.json();
-        if (user && user.authenticated) {
-          setCurrentUser(user);
-          localStorage.setItem("gcb_user_session", JSON.stringify(user));
-        } else {
-          setCurrentUser(null);
-          localStorage.removeItem("gcb_user_session");
-        }
-      } else {
-        setCurrentUser(null);
-        localStorage.removeItem("gcb_user_session");
+      const user = authRes.ok ? await authRes.json() : null;
+      if (user && user.authenticated) {
+        setClassroomUser(prev => (JSON.stringify(prev) === JSON.stringify(user) ? prev : user));
+        localStorage.setItem("gcb_user_session", JSON.stringify(user));
+        return user;
       }
-
-      // 2. Fetch Status
-      const statusRes = await fetch('/api/status');
-      if (statusRes.ok) {
-        const statusData = await statusRes.json();
-        setBackendStatus({
-          online: true,
-          no_delete_policy_enforced: statusData.no_delete_policy_enforced
-        });
-      }
-
-      // 3. Fetch Courses
-      const coursesRes = await fetch('/api/courses');
-      if (coursesRes.ok) {
-        const data = await coursesRes.json();
-        if (data.courses && data.courses.length > 0) {
-          setCourses(data.courses.map(c => ({
-            id: c.id,
-            name: c.name,
-            section: c.section || "Default Section",
-            enrollmentCode: c.enrollment_code || "ENR" + Math.floor(100 + Math.random() * 900),
-            studentsCount: c.students_count || 0,
-            topicsCount: c.materials_count || 4,
-            materialsCount: c.materials_count || 4,
-            courseworkCount: c.coursework_count || 4,
-            state: c.state || "ACTIVE",
-            topics: [
-              "Week 1: Foundations of Cloud Infrastructure",
-              "Week 2: Compute & Container Orchestration",
-              "Week 3: Cloud Storage & Scalable Databases",
-              "Week 4: DevOps, Security & Final Capstone"
-            ]
-          })));
-          if (!selectedCourseForSync) setSelectedCourseForSync(data.courses[0].id);
-        }
-      }
+      setClassroomUser(null);
+      localStorage.removeItem("gcb_user_session");
     } catch (err) {
-      console.log("Status sync check:", err);
+      console.log("Session check:", err);
+    }
+    return null;
+  };
+
+  // The teacher's Classroom courses, for the course count. One list call; not polled, because every
+  // read is a Google API call. Vercel has no /api/classroom routes, so it falls back to /api/courses.
+  const refreshCourses = async () => {
+    try {
+      let res = await fetch('/api/classroom/courses');
+      if (res.status === 404) res = await fetch('/api/courses');
+      const data = res.ok ? await res.json() : {};
+      setCourses(res.ok ? (data.courses || []) : []);
+    } catch (err) {
+      console.log("Course list:", err);
     }
   };
 
+  const classroomEmail = classroomUser ? classroomUser.email : null;
   useEffect(() => {
-    // 1. Check if returning from redirect Google login flow
-    checkRedirectAuthResult().then(profile => {
+    if (classroomEmail) refreshCourses();
+    else setCourses([]);
+  }, [classroomEmail]);
+
+  useEffect(() => {
+    // 1. Returning from a Firebase redirect sign-in: finish by connecting Classroom
+    checkRedirectAuthResult().then(async profile => {
       if (profile) {
-        setCurrentUser(profile);
-        showToast(`Signed in as ${profile.displayName || profile.email} (${profile.classification || "Supporter"})`);
+        setFirebaseProfile(profile);
+        if (!(await refreshSession())) connectClassroom();
       }
     });
 
     // 2. Subscribe to Firebase real-time auth state
-    const unsubscribeAuth = subscribeToAuth((profile) => {
-      if (profile) {
-        setCurrentUser(profile);
-      }
-    });
+    const unsubscribeAuth = subscribeToAuth((profile) => setFirebaseProfile(profile || null));
 
     // 3. Check URL parameters for OAuth status notifications
     const params = new URLSearchParams(window.location.search);
@@ -551,8 +529,8 @@ export default function App() {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
-    checkAuthAndFetchData();
-    const interval = setInterval(checkAuthAndFetchData, 15000);
+    refreshSession();
+    const interval = setInterval(refreshSession, 15000);
 
     return () => {
       unsubscribeAuth();
@@ -561,38 +539,35 @@ export default function App() {
   }, []);
 
   // Real-time synchronization of user profile & role changes
+  const firebaseUid = firebaseProfile ? firebaseProfile.uid : null;
   useEffect(() => {
-    if (!currentUser?.uid) return;
-    const unsub = subscribeToUserProfile(currentUser.uid, (updatedData) => {
+    if (!firebaseUid) return;
+    const unsub = subscribeToUserProfile(firebaseUid, (updatedData) => {
       if (updatedData) {
-        setCurrentUser(prev => ({ ...prev, ...updatedData }));
+        setFirebaseProfile(prev => (prev ? { ...prev, ...updatedData } : prev));
       }
     });
     return () => unsub();
-  }, [currentUser?.uid]);
+  }, [firebaseUid]);
 
-  // Unbreakable Google Authentication Flow
+  // Sign-in: the Firebase LMS profile first when Firebase is configured, then the Google sign-in
+  // that gives Course Builder access to Classroom. A Firebase problem never blocks Classroom.
   const handleLogin = async () => {
     setIsLoggingIn(true);
-    try {
-      const userProfile = await signInWithGoogle();
-      if (userProfile) {
-        setCurrentUser(userProfile);
-        setShowLoginModal(false);
-        showToast(`Welcome ${userProfile.displayName || userProfile.email}! Classification: ${userProfile.classification || "Supporter"}`);
+    if (isFirebaseConfigured) {
+      try {
+        const userProfile = await signInWithGoogle();
+        if (!userProfile) return; // Firebase redirect sign-in: Classroom is connected when it returns
+        setFirebaseProfile(userProfile);
+      } catch (err) {
+        console.warn("[Firebase Google Auth] continuing with the Classroom sign-in:", err);
+        if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
+          setIsLoggingIn(false);
+          return;
+        }
       }
-    } catch (err) {
-      console.warn("[Firebase Google Auth error, attempting fallback]:", err);
-      if (err.code === 'auth/unauthorized-domain') {
-        showToast("Domain not authorized: add this URL to Firebase Console -> Authentication -> Settings -> Authorized Domains.", "error");
-      } else if (err.code === 'auth/invalid-api-key') {
-        showToast("Firebase Web API Key is missing or invalid. Please check Vercel / .env settings.", "error");
-      } else if (err.code !== 'auth/popup-closed-by-user') {
-        window.location.href = '/api/auth/google_login';
-      }
-    } finally {
-      setIsLoggingIn(false);
     }
+    connectClassroom();
   };
 
   const handleLogout = async () => {
@@ -604,7 +579,8 @@ export default function App() {
     }
     localStorage.removeItem("gcb_user_session");
     localStorage.removeItem("gcb_active_user");
-    setCurrentUser(null);
+    setClassroomUser(null);
+    setFirebaseProfile(null);
     showToast("Signed out of Google session.");
   };
 
@@ -672,30 +648,9 @@ export default function App() {
   // Add Week Module
   const handleAddModule = () => {
     const nextWeek = curriculum.length + 1;
-    const newMod = {
-      sequence: `Week ${nextWeek}`,
-      stream_topic: `Week ${nextWeek}: Advanced Topics ${nextWeek}`,
-      title: `Advanced Module ${nextWeek}`,
-      overview: `Detailed exploration of advanced topics and practical coursework for week ${nextWeek}.`,
-      presentation_urls: [`https://docs.google.com/presentation/d/week${nextWeek}-slides/edit`],
-      presentation_url: `https://docs.google.com/presentation/d/week${nextWeek}-slides/edit`,
-      assignment_title: `Lab ${nextWeek}: Practical Implementation`,
-      assignment_instructions: `Complete the week ${nextWeek} technical lab and submit your findings.`,
-      quiz_title: `Quiz ${nextWeek}: Knowledge Check`,
-      quiz_url: `https://docs.google.com/forms/d/week${nextWeek}-quiz/viewform`,
-      question_prompt: `What were the main architectural trade-offs encountered in Week ${nextWeek}?`,
-      question_type: "SHORT_ANSWER_QUESTION",
-      points: 100,
-      due_date: "2026-11-15",
-      youtube_urls: [""],
-      notebook_enabled: false,
-      notebook_url: "",
-      question_choices: [],
-      question_points: "",
-      quiz_points: "",
-      quiz_questions: [],
-      rubric_url: ""
-    };
+    // An empty week. Made-up links, a fixed due date or filler coursework here would be
+    // published to Classroom as real posts if the teacher did not notice them.
+    const newMod = { ...blankModule(nextWeek), title: `Module ${nextWeek}` };
     const updated = [...curriculum, newMod];
     setCurriculum(updated);
     setCurrentModuleIndex(updated.length - 1);
@@ -891,8 +846,8 @@ export default function App() {
         }
       }
       setActiveTab('courses');
-      // Refreshing the course list re-reads every course, so do it without blocking the button.
-      checkAuthAndFetchData();
+      // Refresh the course count without blocking the button.
+      refreshCourses();
     } catch (err) {
       console.error(err);
       setDeployProgress(p => p ? { ...p, status: 'error', error: err.message } : p);
@@ -908,67 +863,6 @@ export default function App() {
     const fileName = `${(deployProgress.deployed.settings.class_name || "Course").replace(/[^a-zA-Z0-9]/g, "_")}_Classroom_Course.xlsx`;
     XLSX.writeFile(buildDeployedWorkbook(deployProgress.deployed, deployProgress.result), fileName);
     showToast(`Downloaded "${fileName}".`);
-  };
-
-  // Safe Non-Destructive Update action
-  const handleRunSync = async () => {
-    if (!currentUser) {
-      showToast("Please log in with your Google Classroom account to update courses.");
-      setShowLoginModal(true);
-      return;
-    }
-
-    const targetCourseId = selectedCourseForSync || (courses[0] && courses[0].id);
-    if (!targetCourseId) {
-      showToast("Please select a target course to update.");
-      return;
-    }
-
-    setIsProcessing(true);
-    setSyncLogs([
-      `[1/4] AUDIT: Enforcing NO-DELETE safety policy... Zero delete calls verified.`,
-      `[2/4] FETCHING: Inspecting Google Classroom course (ID: ${targetCourseId})...`,
-    ]);
-
-    try {
-      const res = await fetch('/api/courses/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          course_id: targetCourseId,
-          settings,
-          curriculum,
-          students
-        })
-      });
-
-      if (res.ok) {
-        await res.json();
-        setSyncLogs(prev => [
-          ...prev,
-          `[3/4] SYNCING: Updated metadata, ${curriculum.length} topics, lecture presentations, and coursework...`,
-          `[4/4] COMPLETE: Non-destructive update finished safely. 0 items deleted.`
-        ]);
-        showToast(`Updated course "${targetCourseId}" successfully!`);
-        await checkAuthAndFetchData();
-      } else {
-        setSyncLogs(prev => [
-          ...prev,
-          `[3/4] SYNCING: Updated ${curriculum.length} module blocks and attachments...`,
-          `[4/4] COMPLETE: Coursework updated safely in Google Classroom.`
-        ]);
-        showToast("Course updated successfully.");
-      }
-    } catch (err) {
-      setSyncLogs(prev => [
-        ...prev,
-        `[3/4] SYNCING: Updated curriculum modules...`,
-        `[4/4] COMPLETE: Safe sync finished.`
-      ]);
-      showToast("Course updated successfully.");
-    } finally {
-      setIsProcessing(false);
-    }
   };
 
   // Active module reference
@@ -1120,7 +1014,7 @@ export default function App() {
 
               <div style={{ marginTop: '8px', background: 'rgba(66, 133, 244, 0.08)', border: '1px solid rgba(66, 133, 244, 0.25)', borderRadius: '10px', padding: '12px 14px', display: 'flex', gap: '10px', alignItems: 'center' }}>
                 <ShieldCheck size={18} color="#4285f4" style={{ flexShrink: 0 }} />
-                <div style={{ fontSize: '0.78rem', color: '#cbd5e1', lineHeight: 1.4 }}>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
                   Authenticates directly through Google OAuth 2.0. Strict NO-DELETE Policy enforced across all Classroom sessions.
                 </div>
               </div>
@@ -1154,7 +1048,6 @@ export default function App() {
             display: 'flex',
             flexDirection: 'column',
             padding: '28px',
-            background: '#0d1322',
             border: '1px solid rgba(66, 133, 244, 0.3)'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '14px', borderBottom: '1px solid var(--border-color)' }}>
@@ -1201,7 +1094,7 @@ export default function App() {
               <div className="review-modal-summary-item">
                 <span className="review-summary-lbl">Total Points</span>
                 <span className="review-summary-num" style={{ color: '#34a853' }}>
-                  {curriculum.reduce((acc, c) => acc + (Number(c.points) || 100), 0)} pts
+                  {curriculum.reduce((acc, c) => acc + weekPoints(c), 0)} pts
                 </span>
               </div>
             </div>
@@ -1238,28 +1131,28 @@ export default function App() {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <Link2 size={13} color="#4285f4" />
-                          <span style={{ color: pCount > 0 ? '#cbd5e1' : '#64748b' }}>
+                          <span style={{ color: pCount > 0 ? 'var(--text-main)' : '#64748b' }}>
                             Material: {pCount > 0 ? `${pCount} Item(s) Attached` : "None"}
                           </span>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <CheckSquare size={13} color="#fbbc05" />
-                          <span style={{ color: mod.assignment_title ? '#cbd5e1' : '#64748b' }}>
-                            Assignment: {mod.assignment_title || "None"} ({mod.points || 100} pts)
+                          <span style={{ color: mod.assignment_title ? 'var(--text-main)' : '#64748b' }}>
+                            Assignment: {mod.assignment_title ? `${mod.assignment_title} (${pointsOr(mod.points, 100)} pts)` : "None"}
                           </span>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <FileText size={13} color="#a855f7" />
-                          <span style={{ color: mod.quiz_title ? '#cbd5e1' : '#64748b' }}>
+                          <span style={{ color: mod.quiz_title ? 'var(--text-main)' : '#64748b' }}>
                             Quiz: {mod.quiz_title || "None"}
                           </span>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <FileQuestion size={13} color="#06b6d4" />
-                          <span style={{ color: mod.question_prompt ? '#cbd5e1' : '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <span style={{ color: mod.question_prompt ? 'var(--text-main)' : '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             Question: {mod.question_prompt ? mod.question_prompt.slice(0, 35) + "..." : "None"}
                           </span>
                         </div>
@@ -1439,7 +1332,7 @@ export default function App() {
               </div>
             </div>
 
-            <p style={{ fontSize: '0.82rem', color: '#cbd5e1', marginBottom: '8px' }}>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
               Paste student email addresses separated by commas, semicolons, or newlines:
             </p>
 
@@ -2071,7 +1964,7 @@ export default function App() {
                       <input
                         type="text"
                         className="form-control"
-                        style={{ paddingLeft: '36px', fontSize: '0.82rem', background: '#090d16' }}
+                        style={{ paddingLeft: '36px', fontSize: '0.82rem', }}
                         placeholder={`Search among ${students.length} students by email...`}
                         value={studentSearchQuery}
                         onChange={e => setStudentSearchQuery(e.target.value)}
@@ -2129,7 +2022,7 @@ export default function App() {
                   ) : (
                     <div style={{ textAlign: 'center', padding: '24px', background: 'rgba(255, 255, 255, 0.02)', borderRadius: '10px', border: '1px dashed var(--border-color)' }}>
                       <Users size={32} color="#64748b" style={{ margin: '0 auto 10px auto', display: 'block' }} />
-                      <div style={{ fontSize: '0.9rem', color: '#cbd5e1', fontWeight: 600 }}>No students in roster</div>
+                      <div style={{ fontSize: '0.9rem', color: 'var(--text-main)', fontWeight: 600 }}>No students in roster</div>
                       <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                         Add student emails above, paste in bulk, or import from an .xlsx file.
                       </p>
@@ -2499,7 +2392,7 @@ export default function App() {
                     <CheckSquare size={18} color="#fbbc05" />
                     <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>3. Assignment (Assessment / Knowledge Check)</span>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '8px' }}>
-                      {currentMod.assignment_title ? `${currentMod.assignment_title} (${currentMod.points || 100} pts)` : "Optional"}
+                      {currentMod.assignment_title ? `${currentMod.assignment_title} (${pointsOr(currentMod.points, 100)} pts)` : "Optional"}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -2915,73 +2808,6 @@ export default function App() {
           }}
         />
 
-        {/* Sign In & Quick Switch Modal */}
-        {showLoginModal && (
-          <div style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(5, 7, 15, 0.85)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-            padding: '20px'
-          }}>
-            <div style={{
-              background: '#131722',
-              border: '1px solid rgba(255, 255, 255, 0.12)',
-              borderRadius: '16px',
-              width: '100%',
-              maxWidth: '460px',
-              padding: '28px',
-              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 40px rgba(66, 133, 244, 0.15)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '18px'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <div style={{ width: '36px', height: '36px', borderRadius: '10px', background: 'rgba(66, 133, 244, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4285f4' }}>
-                    <User size={20} />
-                  </div>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#f8fafc' }}>Sign In to Studio</h3>
-                    <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: '#94a3b8' }}>Select your account or login with Google</p>
-                  </div>
-                </div>
-                <button onClick={() => setShowLoginModal(false)} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
-                  <X size={20} />
-                </button>
-              </div>
-
-              {/* Google OAuth Login Button */}
-              <button
-                onClick={handleLogin}
-                className="google-btn-top"
-                style={{ width: '100%', padding: '12px', justifyContent: 'center', fontSize: '0.9rem', gap: '10px' }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-                </svg>
-                <span>Sign in with Google Classroom</span>
-              </button>
-
-              <div style={{ marginTop: '6px', background: 'rgba(66, 133, 244, 0.08)', border: '1px solid rgba(66, 133, 244, 0.25)', borderRadius: '10px', padding: '12px 14px', display: 'flex', gap: '10px', alignItems: 'center' }}>
-                <ShieldCheck size={18} color="#4285f4" style={{ flexShrink: 0 }} />
-                <div style={{ fontSize: '0.78rem', color: '#cbd5e1', lineHeight: 1.4 }}>
-                  Authenticates with your Google Classroom account to create, sync, and publish curriculum.
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </main>
     </div>
   );

@@ -50,12 +50,18 @@ export default async function handler(req, res) {
     redirectUri = `${proto}://${host}/api/auth/oauth2callback`;
   }
 
-  // Parse originating return URL from state if proxied from preview
+  // Parse originating return URL from state if proxied from preview. The state comes back in the
+  // URL, so anyone can forge it: only this host, Vercel previews and localhost are accepted,
+  // otherwise the callback would redirect signed-in users to any site (open redirect).
   let returnOrigin = '';
   if (req.query?.state) {
     try {
       const decodedState = JSON.parse(Buffer.from(req.query.state, 'base64').toString('utf8'));
-      returnOrigin = decodedState.returnTo || '';
+      const target = new URL(decodedState.returnTo || '');
+      const allowed = target.host === host
+        || (target.protocol === 'https:' && target.hostname.endsWith('.vercel.app'))
+        || ['localhost', '127.0.0.1'].includes(target.hostname);
+      if (allowed && ['http:', 'https:'].includes(target.protocol)) returnOrigin = target.origin;
     } catch (e) {}
   }
 

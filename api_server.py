@@ -129,6 +129,21 @@ def start_create_job(service, owner: str, workbook_path: str, forms_service=None
     return job_id
 
 
+def _dist_dir() -> str:
+    base_dir = sys._MEIPASS if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, "dist")
+
+
+def _dist_file(url_path: str):
+    """The file under dist/ for a URL path, or None. Paths that climb out of dist/ (..) are refused,
+    so the server never hands out .env, credentials.json or the teacher token files."""
+    dist_dir = os.path.realpath(_dist_dir())
+    candidate = os.path.realpath(os.path.join(dist_dir, urllib.parse.unquote(url_path).lstrip("/\\")))
+    if os.path.commonpath([dist_dir, candidate]) != dist_dir or not os.path.isfile(candidate):
+        return None
+    return candidate
+
+
 class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -176,41 +191,12 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         if agent_routes.handle_get(self, path):
             return
 
-        if path in ("/", "", "/index.html"):
-            dist_index = os.path.join(os.path.dirname(__file__), "dist", "index.html")
-            if os.path.exists(dist_index):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                with open(dist_index, "rb") as f:
-                    content = f.read()
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
-                return
-            else:
-                self.send_response(302)
-                self.send_header("Location", "http://localhost:5173/")
-                self.end_headers()
-                return
-
-        elif path.startswith("/assets/"):
-            asset_path = os.path.join(os.path.dirname(__file__), "dist", path.lstrip("/"))
-            if os.path.exists(asset_path):
-                self.send_response(200)
-                if asset_path.endswith(".js"):
-                    self.send_header("Content-Type", "application/javascript")
-                elif asset_path.endswith(".css"):
-                    self.send_header("Content-Type", "text/css")
-                elif asset_path.endswith(".svg"):
-                    self.send_header("Content-Type", "image/svg+xml")
-                else:
-                    self.send_header("Content-Type", "application/octet-stream")
-                with open(asset_path, "rb") as f:
-                    content = f.read()
-                self.send_header("Content-Length", str(len(content)))
-                self.end_headers()
-                self.wfile.write(content)
-                return
+        if path in ("/", "", "/index.html") and not _dist_file("index.html"):
+            # No production build: the Vite dev server serves the web app
+            self.send_response(302)
+            self.send_header("Location", "http://localhost:5173/")
+            self.end_headers()
+            return
 
         elif path == "/api/stripe/config":
             self._send_json(200, stripe_lms_service.get_stripe_config())
@@ -225,6 +211,10 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
             })
 
         elif path == "/api/users/lms":
+            # Member records hold dates of birth, addresses and phone numbers: signed-in staff only
+            if not agent_routes._current_email(self):
+                self._send_json(401, {"error": "Sign in with your Google account first."})
+                return
             users = stripe_lms_service.load_all_lms_users()
             self._send_json(200, {"users": users, "tag": "lms", "count": len(users)})
 
@@ -265,27 +255,15 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         else:
             if not path.startswith("/api/"):
                 import mimetypes
-                
-                if getattr(sys, 'frozen', False):
-                    base_dir = sys._MEIPASS
-                else:
-                    base_dir = os.path.dirname(os.path.abspath(__file__))
-                    
-                dist_dir = os.path.join(base_dir, "dist")
-                
-                if path == "/" or not path:
-                    file_path = os.path.join(dist_dir, "index.html")
-                else:
-                    file_path = os.path.join(dist_dir, path.lstrip("/"))
-                
-                if not os.path.isfile(file_path):
-                    file_path = os.path.join(dist_dir, "index.html")
-                
-                if os.path.isfile(file_path):
-                    mime_type, _ = mimetypes.guess_type(file_path)
-                    if not mime_type:
-                        mime_type = "application/octet-stream"
-                        
+
+                # A built file, else index.html so the single-page app handles the route
+                file_path = _dist_file(path) or _dist_file("index.html")
+                if file_path:
+                    # Windows can map .js to text/plain in the registry; browsers refuse that for modules
+                    fixed_types = {".js": "application/javascript", ".css": "text/css",
+                                   ".svg": "image/svg+xml", ".html": "text/html; charset=utf-8"}
+                    mime_type = (fixed_types.get(os.path.splitext(file_path)[1].lower())
+                                 or mimetypes.guess_type(file_path)[0] or "application/octet-stream")
                     self.send_response(200)
                     self.send_header("Content-Type", mime_type)
                     with open(file_path, "rb") as f:
@@ -318,17 +296,19 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                     return
 
                 # Write the course to a temporary workbook, the way the engine reads it
-                with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-                    tmp_path = tmp.name
-                write_course_workbook(settings, curriculum, students, tmp_path)
-
                 try:
                     service = agent_routes._teacher_service(self)
                     forms_service = teacher_auth.build_teacher_forms_service(agent_routes._current_email(self))
                 except PermissionError as e:
-                    os.remove(tmp_path)
                     self._send_json(401, {"error": str(e)})
                     return
+                with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+                    tmp_path = tmp.name
+                try:
+                    write_course_workbook(settings, curriculum, students, tmp_path)
+                except Exception:
+                    os.remove(tmp_path)
+                    raise
                 job_id = start_create_job(service, agent_routes._current_email(self), tmp_path, forms_service)
                 self._send_json(202, {"jobId": job_id})
             except Exception as e:
@@ -347,19 +327,22 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                     self._send_json(400, {"error": "Missing course_id"})
                     return
 
+                service = agent_routes._teacher_service(self)
+                forms_service = teacher_auth.build_teacher_forms_service(agent_routes._current_email(self))
+
                 # Write the course to a temporary workbook, the way the engine reads it
                 with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
                     tmp_path = tmp.name
-                write_course_workbook(settings, curriculum, students, tmp_path)
-
-                service = agent_routes._teacher_service(self)
-                forms_service = teacher_auth.build_teacher_forms_service(agent_routes._current_email(self))
-                result = sync_existing_course(service, course_id, tmp_path, verbose=True, forms_service=forms_service)
-
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
+                try:
+                    write_course_workbook(settings, curriculum, students, tmp_path)
+                    result = sync_existing_course(service, course_id, tmp_path, verbose=True, forms_service=forms_service)
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
 
                 self._send_json(200, result)
+            except PermissionError as e:
+                self._send_json(401, {"error": str(e)})
             except Exception as e:
                 self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
 
@@ -540,7 +523,8 @@ class ExclusivePortServer(ThreadingHTTPServer):
 
 
 def run_api_server(port: int = 8000):
-    server_address = ("127.0.0.1", port)
+    # Local only by default. A container sets HOST=0.0.0.0 so it can be reached from outside.
+    server_address = (os.environ.get("HOST", "127.0.0.1"), port)
     # Threaded so one slow Google call cannot hold up every other request
     try:
         httpd = ExclusivePortServer(server_address, CourseBuilderAPIHandler)

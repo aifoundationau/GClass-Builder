@@ -1,0 +1,172 @@
+GOOGLE COURSE BUILDER - REPAIR REPORT
+Date: 2026-10-13
+Scope: the whole website (React front end in src/, Python server, Vercel functions in api/,
+Dockerfile and config). The skill-creator/ folder and _archive/ were not part of the review.
+
+HOW IT WAS CHECKED
+- Read every front-end component, the Python server and routes, the course engine, and the
+  Vercel functions, matching every browser API call to a server route.
+- Static checks: ESLint (undefined names, React hook rules) and pyflakes. No errors before or after.
+- Production build (vite build): passes.
+- All test suites: 181 Python tests + 10 workbook checks pass, plus 3 new tests (184 Python in total).
+- Ran the built site on a local test server and drove it in headless Edge: no console errors,
+  no failed requests; screenshots checked for the Review modal, login dialog, panels and courses tab.
+- Probed the live server for the security issues before and after fixing them.
+
+
+====================================================================================
+PART 1 - WHAT WAS BROKEN AND IS NOW REPAIRED
+====================================================================================
+
+1. CRITICAL SECURITY: the server handed out secret files            [api_server.py]
+   Requests such as http://127.0.0.1:8000/../.env returned the real .env file (Stripe and
+   Gemini keys), credentials.json, token.json and teacher_tokens/_sessions.json (live session
+   IDs, enough to take over a signed-in teacher's session). Confirmed on the running server.
+   Fix: static files are only served from inside dist/; anything else gets the app page.
+   New regression test: test_api_server_static.py. Re-probed: all of these now return index.html.
+   ACTION FOR YOU: if this server was ever reachable by anyone else, rotate the Stripe secret
+   key, the Gemini API key and the Google OAuth client secret, and delete
+   teacher_tokens/_sessions.json so everyone signs in again.
+
+2. SECURITY: member records were readable without signing in        [api_server.py]
+   GET /api/users/lms returned every registered member's date of birth, address, phone and
+   tax ID to anyone. Because the Vite dev server listens on the whole network (--host), anyone
+   on the same Wi-Fi could read it. It now requires a signed-in session (401 otherwise).
+
+3. SECURITY: open redirect in the Vercel sign-in callback           [api/auth/oauth2callback.js]
+   The page users were sent to after Google sign-in came from an unchecked URL parameter, so a
+   crafted link could send them to any website. Now only this site, *.vercel.app previews and
+   localhost are accepted.
+
+4. Sign-in did not give Classroom access, and users were logged out within 15 seconds  [src/App.jsx]
+   The login button tried Firebase first. Your .env still has the placeholder Firebase key, so
+   that either failed with an "API key invalid" message (stuck) or fell back by luck. When
+   Firebase did work, it never created the server session that every Classroom action needs:
+   "Finish & Create Course" failed with "Sign in first", and the 15-second check then signed
+   the user out of the page.
+   Fix: sign-in always finishes with the server's Google sign-in (Classroom access). Firebase
+   runs first only when it is actually configured, and a Firebase error never blocks sign-in.
+   The Firebase profile (classification, superadmin badge) is still merged in when it is the
+   same Google account. Verified: the button now goes straight to /api/auth/google_login.
+   [src/services/firebaseAuthService.js] no longer calls Firebase with the placeholder key.
+
+5. Two login dialogs opened on top of each other                      [src/App.jsx]
+   Removed the duplicate (dark "Sign In to Studio") dialog; one dialog now opens.
+
+6. The page called Google Classroom 1 + 3x(number of courses) times every 15 seconds  [src/App.jsx]
+   The course list was refreshed by the 15-second timer through /api/courses, which also reads
+   students, coursework and materials for every course. Only the count was shown, padded with
+   random fake enrollment codes and a hard-coded topic list; the count also never reset after
+   sign-out, and signed-out visitors got a 401 error every 15 seconds.
+   Fix: the timer now only checks the (local, free) session. The course list is read once at
+   sign-in and after creating a course, using one call, with no fake data.
+
+7. "+ Add Week" filled in fake links and a fixed due date            [src/App.jsx]
+   New weeks came with made-up Google Slides and Google Forms links, a due date of 2026-11-15
+   and filler assignment, quiz and question text. These were published to Classroom as real
+   (broken) posts unless removed by hand. "+ Add Week" now adds an empty week.
+
+8. Unreadable text left over from the old dark theme                  [src/App.jsx]
+   The Review All Modules dialog had a near-black background behind dark text, the student
+   search box was near-black, and several labels were pale grey on white. Fixed and checked in
+   screenshots.
+
+9. Wrong points shown                                                 [src/App.jsx]
+   0-point (ungraded) assignments were displayed as 100 pts. "Total Points" in the Review dialog
+   counted 100 for every week, even weeks with no assignment, and ignored quizzes and questions.
+   It now matches what the server creates (example course: 780 pts).
+
+10. Dead "update course" code that always reported success           [src/App.jsx]
+    handleRunSync (its tab was removed earlier) said "Course updated successfully" even when the
+    request failed or the network was down. Removed, along with its unused state and imports.
+
+11. Course sync could create duplicate posts                          [classroom_course_engine.py]
+    sync_existing_course read only the first page of topics, materials and coursework, and only
+    published coursework, so in larger courses (or with drafts) existing items looked missing
+    and were created again. It now reads every page, drafts included.
+
+12. /api/courses/sync errors                                          [api_server.py]
+    An expired sign-in gave a 500 error with a Python traceback instead of 401, and the temporary
+    workbook was left on disk when something failed (create had the same leak). Both fixed.
+
+13. Revoked or expired Google sign-in caused 500 errors               [teacher_auth.py]
+    It now returns "sign-in has expired, sign in again" (401) instead of crashing the request.
+
+14. PDF uploads failed on a fresh install                             [requirements.txt]
+    The AI tools read PDFs with pypdf, which was not in requirements.txt. Added.
+
+15. Docker image could not start                                      [Dockerfile, api_server.py, agent_routes.py]
+    The image copied 3 of the 11 Python modules the server imports (ModuleNotFoundError on
+    start), the server only listened on 127.0.0.1 inside the container, and Google sign-in
+    always returned to localhost:5173. Now: all modules are copied, HOST=0.0.0.0 is set for the
+    container (local runs still default to 127.0.0.1), and the sign-in return address can be set
+    with GOOGLE_REDIRECT_URI (default unchanged for local development).
+
+16. VS Code "Launch Chrome" opened the wrong port                    [.vscode/launch.json]
+    It pointed at localhost:8080; the app runs on localhost:5173.
+
+
+====================================================================================
+PART 2 - STILL BROKEN OR NEEDS YOUR ACTION / DECISION
+====================================================================================
+
+A. Firebase is not configured (your setting to change)
+   VITE_FIREBASE_API_KEY in .env is still "your_firebase_api_key_here". Sign-in works without it,
+   but the Firebase features (Supporter classification, superadmin badge, Firestore user records)
+   are off until a real Firebase web key is added and the dev server is restarted.
+
+B. Course creation and editing do not work on the Vercel deployment (architecture limit)
+   Vercel only has small JavaScript versions of sign-in, status and the course list. Creating,
+   editing and the AI tools need the Python server, which .vercelignore excludes. On Vercel these
+   buttons return "Request failed (404)". Fixing this means hosting the Python server somewhere
+   (for example the Docker image) or porting it; it was not something a code repair could do.
+
+C. Vercel session cookie is not signed (security improvement recommended)
+   api/auth/* stores the Google access token and profile in a plain base64 cookie. Anyone can
+   forge a cookie that makes /api/auth/me show any name and email (Classroom calls still need a
+   real token). Signing the cookie needs a server secret; I did not add one without your input.
+
+D. Personal data is committed to GitHub
+   lms_firebase_users.json (4 member records with date of birth, address, phone and tax ID
+   fields) is tracked in git and pushed to github.com/aifoundationau/GClass-Builder. If these are
+   real people, remove the file from the repository (and its history) and add it to .gitignore.
+
+E. Policy contradiction: course copying
+   The app says "No duplicate course allowed" and /api/courses/duplicate is disabled, but
+   /api/agent/edit/copy (agent_routes.py) still duplicates a course. No current page calls it.
+   Decide whether to remove it or allow it.
+
+F. Unused screens still in the code (not reachable from the website)
+   - src/components/CourseAgentPanel.jsx (AI course agent) is not imported anywhere.
+   - The Stripe registration dialog (RegistrationModal) and the LMS member/role management in
+     App.jsx can no longer be opened; their buttons and tab were removed in an earlier commit.
+   They are not broken; decide whether to reconnect them or delete them.
+
+G. Your git folder has file-sync duplicate entries
+   .git contains copies such as "refs/heads/main (1)" and "index (1)", made by a file-sync tool.
+   Git ignores them but prints warnings, and "git log --all" fails. They only point at older
+   commits that are already in main. To clean up (close any Git tools first), delete every file
+   whose name ends in " (1)" inside .git. The project folder appears to be in a synced folder;
+   keeping a git repository in one can cause this again.
+
+H. Smaller items left as they are
+   - Error responses from the Python server include full Python tracebacks; fine locally, but
+     turn this off before exposing the server publicly.
+   - Times without a time zone are read in the server computer's time zone. Same machine
+     locally, but a Docker server runs on UTC, so due times would shift there.
+   - /api/courses and the command-line course list (list_courses_and_status_check) read only
+     the first page of courses. The website no longer uses /api/courses locally.
+   - README.md describes features that were removed (account presets, Safe Course Update tab,
+     API inspector); .agents/rules/model-routing.md describes three-model routing, but
+     ai_model_router.py now uses one model (gemini-3.5-flash-lite). The documentation needs
+     updating. I did not test a live Gemini call.
+   - fix_app_styles.py is a finished one-off theme script and can be deleted.
+   - 14 old temporary .xlsx files from before fix 12 are in your Windows %TEMP% folder.
+
+I. Changes not made by this repair
+   While I worked, something else added ".vercel/" to .gitignore and deleted
+   skill-creator/assets/desktop.ini (probably the Vercel CLI and a sync tool). I left both alone.
+
+Nothing was committed to git. You also have two Vite dev servers running (ports 5173 and 5174)
+from before; restart "npm run dev" to pick up the changes (it also starts the Python server
+on port 8000, which was not running).

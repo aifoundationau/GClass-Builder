@@ -58,3 +58,9 @@ Thumbs.db
 
 # Per-teacher OAuth credentials and sessions
 teacher_tokens/
+
+# Vercel
+.vercel/
+
+.vercel
+.env*

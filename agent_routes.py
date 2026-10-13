@@ -26,7 +26,8 @@ from standards import list_standards
 # rejects a token whose scopes differ from the request, so allow the superset.
 os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
-REDIRECT_URI = "http://localhost:5173/api/auth/oauth2callback"
+# Must be registered on the OAuth client. Override it when the app is not served from the Vite dev server.
+REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "http://localhost:5173/api/auth/oauth2callback")
 CREDENTIALS_FILE = "credentials.json"
 # state -> PKCE code verifier, held until the Google callback arrives
 PENDING_LOGINS: Dict[str, str] = {}
