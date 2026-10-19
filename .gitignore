@@ -19,6 +19,13 @@ __pycache__/
 # Sensitive & Secret Files (Google OAuth & Sessions)
 credentials*.json
 !credentials.example.json
+# Security review with unfixed findings: keep out of the public repository
+finalreport.txt
+# Firebase Admin service-account keys (scripts/rbac-admin.mjs)
+*-firebase-adminsdk-*.json
+service-account*.json
+service_account*.json
+serviceAccount*.json
 token*.json
 user_session*.json
 * (1).*

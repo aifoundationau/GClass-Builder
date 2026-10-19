@@ -52,6 +52,7 @@ except ImportError:
 import stripe_lms_service
 import agent_routes
 import teacher_auth
+import gmail_service
 
 IS_VERCEL = bool(os.environ.get("VERCEL"))
 
@@ -210,13 +211,13 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 "tools": [schema["mcp_tool"]]
             })
 
-        elif path == "/api/users/lms":
+        elif path in ("/api/users/lms", "/api/users/gcoursebuilder"):
             # Member records hold dates of birth, addresses and phone numbers: signed-in staff only
             if not agent_routes._current_email(self):
                 self._send_json(401, {"error": "Sign in with your Google account first."})
                 return
             users = stripe_lms_service.load_all_lms_users()
-            self._send_json(200, {"users": users, "tag": "lms", "count": len(users)})
+            self._send_json(200, {"users": users, "tag": "#gcoursebuilder", "count": len(users)})
 
         elif path == "/api/courses":
             try:
@@ -251,6 +252,17 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 })
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
+
+        # 6. Role Assignment Notification Logs
+        elif path == "/api/notifications/logs":
+            logs = []
+            if os.path.exists(gmail_service.GMAIL_NOTIFICATIONS_LOG):
+                try:
+                    with open(gmail_service.GMAIL_NOTIFICATIONS_LOG, "r", encoding="utf-8") as f:
+                        logs = json.load(f)
+                except Exception:
+                    logs = []
+            self._send_json(200, {"logs": logs, "tag": "#gcoursebuilder"})
 
         else:
             if not path.startswith("/api/"):
@@ -405,8 +417,9 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                         "payment_terms_days": 30,
                         "prefix": "LMS"
                     },
-                    "tags": ["lms"],
-                    "source": "lms"
+                    "tag": "#gcoursebuilder",
+                    "tags": ["#gcoursebuilder", "gcoursebuilder", "lms"],
+                    "source": "gcoursebuilder"
                 }
                 saved_user = stripe_lms_service.save_lms_user_record(user_record)
 
@@ -477,8 +490,9 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                         "payment_terms_days": 30,
                         "prefix": "LMS"
                     },
-                    "tags": ["lms"],
-                    "source": "lms"
+                    "tag": "#gcoursebuilder",
+                    "tags": ["#gcoursebuilder", "gcoursebuilder", "lms"],
+                    "source": "gcoursebuilder"
                 }
                 saved_user = stripe_lms_service.save_lms_user_record(user_record)
 
@@ -503,6 +517,31 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                     return
                 updated = stripe_lms_service.attach_payment_method(customer_id, payment_method_id)
                 self._send_json(200, {"success": True, "customer": updated})
+            except Exception as e:
+                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+
+        # 8. Send Role & Permissions Notification Email via Gmail API
+        elif path == "/api/notifications/send-role-email":
+            try:
+                body = self._read_json_body()
+                recipient_email = body.get("recipientEmail") or body.get("email")
+                role_key = body.get("roleKey") or body.get("role", "supporter")
+                role_label = body.get("roleLabel") or body.get("label") or role_key.capitalize()
+                permissions = body.get("permissions") or []
+                admin_email = body.get("adminEmail") or agent_routes._current_email(self)
+
+                if not recipient_email or "@" not in str(recipient_email):
+                    self._send_json(400, {"error": "Valid recipientEmail is required."})
+                    return
+
+                result = gmail_service.send_role_notification_via_gmail(
+                    recipient_email=str(recipient_email).strip().lower(),
+                    role_key=str(role_key).strip().lower(),
+                    role_label=str(role_label).strip(),
+                    permissions=permissions,
+                    admin_email=admin_email
+                )
+                self._send_json(200, result)
             except Exception as e:
                 self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
 

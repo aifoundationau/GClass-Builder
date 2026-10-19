@@ -5,12 +5,15 @@
     "name": "David",
     "business_name": "AI Foundation Australia",
     "stripe_customer_id": "cus_VPMAr2NzIXgCQ3",
+    "tag": "#gcoursebuilder",
     "tags": [
+      "#gcoursebuilder",
+      "gcoursebuilder",
       "lms"
     ],
     "role": "school_admin",
-    "source": "lms",
-    "updated_at": "2026-10-09T06:38:27.758787+00:00"
+    "source": "gcoursebuilder",
+    "updated_at": "2026-10-19T11:12:00.000000+00:00"
   },
   {
     "uid": "lms_usr_VPNAgUaK6n4AEW",
@@ -33,11 +36,14 @@
       "payment_terms_days": 30,
       "prefix": "LMS"
     },
+    "tag": "#gcoursebuilder",
     "tags": [
+      "#gcoursebuilder",
+      "gcoursebuilder",
       "lms"
     ],
-    "source": "lms",
-    "updated_at": "2026-10-09T07:40:17.125147+00:00"
+    "source": "gcoursebuilder",
+    "updated_at": "2026-10-19T11:12:00.000000+00:00"
   },
   {
     "uid": "lms_usr_VPNFlVwPcpElKB",
@@ -62,11 +68,14 @@
       "payment_terms_days": 30,
       "prefix": "LMS"
     },
+    "tag": "#gcoursebuilder",
     "tags": [
+      "#gcoursebuilder",
+      "gcoursebuilder",
       "lms"
     ],
-    "source": "lms",
-    "updated_at": "2026-10-09T07:45:37.144317+00:00"
+    "source": "gcoursebuilder",
+    "updated_at": "2026-10-19T11:12:00.000000+00:00"
   },
   {
     "uid": "lms_usr_VPNaghETJcksD9",
@@ -96,10 +105,13 @@
       "payment_terms_days": 30,
       "prefix": "LMS"
     },
+    "tag": "#gcoursebuilder",
     "tags": [
+      "#gcoursebuilder",
+      "gcoursebuilder",
       "lms"
     ],
-    "source": "lms",
-    "updated_at": "2026-10-09T08:06:16.558022+00:00"
+    "source": "gcoursebuilder",
+    "updated_at": "2026-10-19T11:12:00.000000+00:00"
   }
 ]

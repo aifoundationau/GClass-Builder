@@ -46,6 +46,8 @@ LOGIN_SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
     # Rubrics: Classroom reads the rubric's Google Sheet when importing it.
     "https://www.googleapis.com/auth/spreadsheets.readonly",
+    # Gmail API: send email notifications when roles/permissions are assigned
+    "https://www.googleapis.com/auth/gmail.send",
 ]
 
 

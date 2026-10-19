@@ -32,12 +32,16 @@ import {
   Plus,
   Compass,
   ArrowRight,
+  KeyRound,
   X
 } from 'lucide-react';
 import RegistrationModal from './components/RegistrationModal';
 import ClassroomEnvironment from './components/ClassroomEnvironment';
 import DeployProgress from './components/DeployProgress';
 import QuizQuestionsEditor from './components/QuizQuestionsEditor';
+import RolePermissionsManager from './components/RolePermissionsManager';
+import { PermissionGuard, PermissionNotice, PermissionProvider, useRbacSession } from './rbac/PermissionContext';
+import { ROLE_BY_KEY, SUPERADMIN_ROLE } from './rbac/permissions';
 import {
   BLANK_SETTINGS, NOTEBOOK_HOSTS_TEXT, TEMPLATE_EXAMPLE, blankModule, buildCourseWorkbook, buildDeployedWorkbook,
   importCourseWorkbook, isIsoDue, isNotebookUrl, isSheetLink, nonEmptyChoices, quizQuestionProblems, quizTotalPoints,
@@ -245,8 +249,16 @@ export default function App() {
   const sameAccount = Boolean(classroomUser && firebaseProfile
     && String(classroomUser.email || '').toLowerCase() === String(firebaseProfile.email || '').toLowerCase());
   const currentUser = classroomUser ? { ...(sameAccount ? firebaseProfile : {}), ...classroomUser } : null;
+  // Role-based permissions (src/rbac): the role claim of that same Firebase account, and the
+  // permissions the Superadmin gave the role. Firestore rules enforce the same.
+  const rbac = useRbacSession(sameAccount ? firebaseProfile.uid : null);
   // Dynamic Superadmin from Firebase (Zero Hardcoding)
-  const isSuperAdmin = Boolean(currentUser?.isSuperAdmin);
+  const isSuperAdmin = Boolean(currentUser?.isSuperAdmin) || rbac.role === SUPERADMIN_ROLE;
+  // Role Permissions needs Firebase. Superadmins by profile without the role claim yet see it
+  // read-only, with how to get the claim.
+  const canOpenRoles = isFirebaseConfigured && (rbac.can('roles.manage') || isSuperAdmin);
+  // Signed-out users keep the button: creating a course asks them to log in first
+  const createBlocked = Boolean(currentUser) && !rbac.can('courses.create');
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -289,6 +301,10 @@ export default function App() {
   };
 
   const [activeTab, setActiveTab] = useState('studio');
+  // Leave Role Permissions on sign-out, or when the role no longer opens it
+  useEffect(() => {
+    if (activeTab === 'roles' && !canOpenRoles) setActiveTab('studio');
+  }, [activeTab, canOpenRoles]);
   const [settings, setSettings] = useState(SAMPLE_PRESETS.cloud.settings);
   const [curriculum, setCurriculum] = useState(SAMPLE_PRESETS.cloud.curriculum);
   const [students, setStudents] = useState(SAMPLE_PRESETS.cloud.students || []);
@@ -759,6 +775,11 @@ export default function App() {
       return;
     }
 
+    if (createBlocked) {
+      showToast(rbac.explain('courses.create'));
+      return;
+    }
+
     if (!(settings.class_name || "").trim()) {
       showToast("Give the course a name (Course Settings) before creating it.");
       setOpenPanels(prev => ({ ...prev, metadata: true }));
@@ -923,7 +944,8 @@ export default function App() {
     setCurriculum(updated);
   };
 
-  return (
+  // PermissionGuard and usePermission below read the RBAC session through the provider
+  const page = (
     <div className="app-container">
       <DeployProgress
         progress={deployProgress}
@@ -1222,7 +1244,8 @@ export default function App() {
                     setShowReviewAllModal(false);
                     handleCreateCourse();
                   }}
-                  disabled={isProcessing}
+                  disabled={isProcessing || createBlocked}
+                  title={createBlocked ? rbac.explain('courses.create') : undefined}
                   style={{ padding: '9px 22px', fontSize: '0.9rem' }}
                 >
                   <Play size={16} />
@@ -1436,6 +1459,17 @@ export default function App() {
             <span className="nav-badge">{courses.length}</span>
           </button>
 
+          {canOpenRoles && (
+            <button
+              className={`nav-item ${activeTab === 'roles' ? 'active' : ''}`}
+              onClick={() => setActiveTab('roles')}
+            >
+              <KeyRound size={18} />
+              <span>Role Permissions</span>
+              <span className="nav-badge">RBAC</span>
+            </button>
+          )}
+
         </nav>
 
         {/* Server & Safety Guardrail Badge */}
@@ -1460,10 +1494,12 @@ export default function App() {
             <h1 className="page-title">
               {activeTab === 'studio' && "Course Studio & Weekly Modules"}
               {activeTab === 'courses' && "Classroom Courses"}
+              {activeTab === 'roles' && "Role Permissions"}
             </h1>
             <p className="page-desc">
               {activeTab === 'studio' && "Step through one module at a time. All panels are collapsible dropdowns to maximize workspace."}
               {activeTab === 'courses' && "Edit your Google Classroom courses after they are created: course details, topics, classwork and announcements."}
+              {activeTab === 'roles' && "Choose what each role may do. Saved to Firestore and enforced by its security rules."}
             </p>
           </div>
 
@@ -1498,9 +1534,9 @@ export default function App() {
               <button
                 className="btn-primary"
                 onClick={handleCreateCourse}
-                disabled={isProcessing}
+                disabled={isProcessing || createBlocked}
                 style={{ padding: '9px 18px', fontSize: '0.85rem' }}
-                title="Publish course directly to Google Classroom"
+                title={createBlocked ? rbac.explain('courses.create') : "Publish course directly to Google Classroom"}
               >
                 <Play size={15} />
                 <span>{isProcessing ? "Deploying..." : "Finish & Create Course"}</span>
@@ -1543,7 +1579,7 @@ export default function App() {
                       fontWeight: 700,
                       textTransform: 'uppercase'
                     }}>
-                      {isSuperAdmin ? "SUPERADMIN" : (currentUser.classification || currentUser.role || "Supporter")}
+                      {isSuperAdmin ? "SUPERADMIN" : (ROLE_BY_KEY[rbac.role]?.label || currentUser.classification || currentUser.role || "Supporter")}
                     </span>
                   </div>
                   <div className="top-user-email">
@@ -1655,7 +1691,8 @@ export default function App() {
                     className="btn-primary"
                     style={{ padding: '8px 20px', fontSize: '0.84rem' }}
                     onClick={handleCreateCourse}
-                    disabled={isProcessing}
+                    disabled={isProcessing || createBlocked}
+                    title={createBlocked ? rbac.explain('courses.create') : undefined}
                   >
                     <Play size={15} />
                     <span>{isProcessing ? "Deploying..." : "Finish & Create Course"}</span>
@@ -2737,7 +2774,8 @@ export default function App() {
                     className="btn-primary"
                     style={{ padding: '10px 22px', fontSize: '0.95rem' }}
                     onClick={handleCreateCourse}
-                    disabled={isProcessing}
+                    disabled={isProcessing || createBlocked}
+                    title={createBlocked ? rbac.explain('courses.create') : undefined}
                   >
                     <Play size={16} />
                     <span>{isProcessing ? "Deploying Course..." : "Finish & Create Course"}</span>
@@ -2792,8 +2830,17 @@ export default function App() {
         {/* ================================================================= */}
         {activeTab === 'courses' && (
           <div className="animate-fade-in">
-            <ClassroomEnvironment user={currentUser} onImportCourse={applyImportedCourse} />
+            <PermissionGuard permission="classroom.manage" fallback={<PermissionNotice permission="classroom.manage" />}>
+              <ClassroomEnvironment user={currentUser} onImportCourse={applyImportedCourse} />
+            </PermissionGuard>
           </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* TAB 3: ROLE PERMISSIONS (SUPERADMIN RBAC) */}
+        {/* ================================================================= */}
+        {activeTab === 'roles' && canOpenRoles && (
+          <RolePermissionsManager showToast={showToast} />
         )}
 
         {/* Stripe Registration Modal */}
@@ -2811,4 +2858,6 @@ export default function App() {
       </main>
     </div>
   );
+
+  return <PermissionProvider session={rbac}>{page}</PermissionProvider>;
 }

@@ -46,7 +46,8 @@ export default async function handler(req, res) {
     'https://www.googleapis.com/auth/classroom.rosters.readonly',
     'openid',
     'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/userinfo.profile'
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/gmail.send'
   ].join(' ');
 
   // Pass originating host in state so callback redirects user back to their active preview deployment

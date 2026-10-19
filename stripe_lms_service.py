@@ -71,7 +71,7 @@ def get_stripe_config() -> dict:
         "invoicePrefix": "LMS",
         "defaultInvoiceStatus": "draft",
         "paymentTermsDays": 30,
-        "tag": "lms"
+        "tag": "#gcoursebuilder"
     }
 
 
@@ -283,8 +283,8 @@ def create_stripe_customer(payload: dict) -> dict:
         "email": email,
         "phone": phone,
         "invoice_prefix": unique_prefix,
-        "metadata[tag]": "lms",
-        "metadata[system]": "lms",
+        "metadata[tag]": "#gcoursebuilder",
+        "metadata[system]": "gcoursebuilder",
         "metadata[base_prefix]": "LMS",
         "metadata[account_type]": account_type,
         "metadata[role]": role,
@@ -326,8 +326,8 @@ def create_setup_intent(customer_id: str) -> dict:
     params = {
         "customer": customer_id,
         "usage": "off_session",
-        "metadata[tag]": "lms",
-        "metadata[purpose]": "lms_card_on_file"
+        "metadata[tag]": "#gcoursebuilder",
+        "metadata[purpose]": "gcoursebuilder_card_on_file"
     }
     return _stripe_api_request("setup_intents", params)
 
@@ -341,29 +341,34 @@ def attach_payment_method(customer_id: str, payment_method_id: str) -> dict:
     })
 
 
-# 2. Firebase Database Sync (tagged with 'lms')
+# 2. Firebase Database Sync (tagged with '#gcoursebuilder')
 def load_all_lms_users() -> list:
-    """Reads all users tagged with 'lms' from the local persistent Firestore cache."""
+    """Reads all users tagged with '#gcoursebuilder', 'gcoursebuilder', or 'lms' from the local persistent Firestore cache."""
     if not os.path.exists(FIREBASE_USERS_FILE):
         return []
     try:
         with open(FIREBASE_USERS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # Filter specifically for tag 'lms'
-            return [u for u in data if "lms" in u.get("tags", [])]
+            # Filter specifically for tag '#gcoursebuilder', 'gcoursebuilder', or 'lms'
+            return [
+                u for u in data 
+                if any(t in u.get("tags", []) for t in ("#gcoursebuilder", "gcoursebuilder", "lms"))
+                or u.get("tag") in ("#gcoursebuilder", "gcoursebuilder", "lms")
+            ]
     except Exception:
         return []
 
 
 def save_lms_user_record(user_record: dict) -> dict:
     """
-    Saves a registered user to the Firebase Firestore store with tag 'lms'.
-    Ensures that any system accessing 'lms' items can index and use this record.
+    Saves a registered user to the Firebase Firestore store with tag '#gcoursebuilder'.
+    Ensures that any system accessing 'gcoursebuilder' items can index and use this record.
     """
-    # Enforce mandatory 'lms' tag
-    tags = list(set(user_record.get("tags", []) + ["lms"]))
+    # Enforce mandatory '#gcoursebuilder' tag
+    tags = list(set(user_record.get("tags", []) + ["#gcoursebuilder", "gcoursebuilder", "lms"]))
     user_record["tags"] = tags
-    user_record["source"] = "lms"
+    user_record["tag"] = "#gcoursebuilder"
+    user_record["source"] = "gcoursebuilder"
     user_record["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     existing_users = []

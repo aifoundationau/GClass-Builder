@@ -319,7 +319,7 @@ export default function RegistrationModal({
               </h2>
               <p style={{ margin: '2px 0 0', fontSize: '0.78rem', color: '#94a3b8' }}>
                 {superAdmin ? (
-                  <>Stripe Customer Setup &bull; Auto-sync to Firebase with <span style={{ color: '#a78bfa', fontWeight: 600 }}>tag: 'lms'</span></>
+                  <>Stripe Customer Setup &bull; Auto-sync to Firebase with <span style={{ color: '#a78bfa', fontWeight: 600 }}>tag: '#gcoursebuilder'</span></>
                 ) : (
                   <>Member Billing Profile & Course Enrollment</>
                 )}
@@ -367,7 +367,7 @@ export default function RegistrationModal({
               </h3>
               <p style={{ color: '#94a3b8', fontSize: '0.85rem', maxWidth: '440px', margin: '0 auto 20px' }}>
                 {superAdmin ? (
-                  <>Created in Stripe and stored in Firebase Database with cross-site <span style={{ color: '#38bdf8', fontWeight: 600 }}>'lms'</span> indexing.</>
+                  <>Created in Stripe and stored in Firebase Database with cross-site <span style={{ color: '#38bdf8', fontWeight: 600 }}>'#gcoursebuilder'</span> indexing.</>
                 ) : (
                   <>Your account has been registered. Keep your Client ID for billing reference.</>
                 )}
@@ -442,7 +442,7 @@ export default function RegistrationModal({
                         fontSize: '0.75rem',
                         fontWeight: 700
                       }}>
-                        tag: 'lms'
+                        tag: '#gcoursebuilder'
                       </span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -1242,7 +1242,7 @@ export default function RegistrationModal({
                     &bull; <strong>Draft Invoices:</strong> All invoices are created as <em>Draft</em> for admin review before any card charging.
                   </div>
                   <div>
-                    &bull; <strong>Database Tag:</strong> Record stamped with <code>tag: 'lms'</code> for shared access across all your LMS systems.
+                    &bull; <strong>Database Tag:</strong> Record stamped with <code>tag: '#gcoursebuilder'</code> for Firebase synchronization across Google Course Builder.
                   </div>
                   <div>
                     &bull; <strong>Invoice Prefix & Terms:</strong> Unique <code>LMS-</code> prefix with 30-day payment terms.

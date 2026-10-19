@@ -17,7 +17,8 @@ import {
   getDocs, 
   onSnapshot 
 } from "firebase/firestore";
-import { auth, db, googleProvider, isFirebaseConfigured } from "../firebase";
+import { auth, db, googleProvider, isFirebaseConfigured, FIREBASE_SYSTEM_TAG } from "../firebase";
+import { DEFAULT_ROLE } from "../rbac/permissions";
 
 // Standard Role Categories per specification
 export const USER_CATEGORIES = [
@@ -75,9 +76,12 @@ export async function verifySuperadminStatus(userRecord) {
       const superadminEmailDoc = await getDoc(doc(db, "superadmins", emailLower));
       if (superadminEmailDoc.exists()) return true;
 
-      // Check system_config/admin doc
-      const configDoc = await getDoc(doc(db, "system_config", "admin"));
-      if (configDoc.exists()) {
+      // Check system_config/admin doc (firestore.rules let only superadmins read it)
+      const configDoc = await getDoc(doc(db, "system_config", "admin")).catch((err) => {
+        if (err.code === "permission-denied") return null;
+        throw err;
+      });
+      if (configDoc && configDoc.exists()) {
         const configData = configDoc.data();
         const adminList = configData.adminEmails || configData.admins || [];
         if (Array.isArray(adminList) && adminList.map(e => String(e).toLowerCase()).includes(emailLower)) {
@@ -102,13 +106,16 @@ export async function syncUserToFirebase(authUser) {
   const photoURL = authUser.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(email)}&backgroundColor=4285f4`;
 
   let existingData = null;
+  // Whether /users/{uid} exists (null when Firestore could not say): create or update below
+  let profileExists = null;
 
   // 1. Fetch existing profile from Firestore if available
   if (isFirebaseConfigured && db) {
     try {
       const userRef = doc(db, "users", uid);
       const userSnap = await getDoc(userRef);
-      if (userSnap.exists()) {
+      profileExists = userSnap.exists();
+      if (profileExists) {
         existingData = userSnap.data();
       }
     } catch (err) {
@@ -117,7 +124,7 @@ export async function syncUserToFirebase(authUser) {
   }
 
   // Fallback to local storage mirror if Firestore not loaded
-  if (!existingData) {
+  if (profileExists === null) {
     try {
       const cached = localStorage.getItem(`gcb_user_${uid}`);
       if (cached) existingData = JSON.parse(cached);
@@ -128,34 +135,46 @@ export async function syncUserToFirebase(authUser) {
 
   // Requirement 5: People log in with Google, then become Supporters immediately as their classification
   // If they already have an assigned category (changed by Superadmin), preserve it!
-  const assignedRole = existingData?.role || existingData?.classification || "Supporter";
+  const assignedRole = existingData?.role || existingData?.classification || DEFAULT_ROLE;
   const loginCount = (existingData?.loginCount || 0) + 1;
 
-  const userProfile = {
+  // What users may write about themselves. firestore.rules refuse changes to role,
+  // classification, status and the admin flags, which only a Superadmin sets.
+  const ownFields = {
     uid: uid,
     email: email,
     displayName: displayName,
     name: displayName,
     photoURL: photoURL,
     avatar: photoURL,
+    lastLoginAt: nowIso,
+    provider: "google.com",
+    tag: FIREBASE_SYSTEM_TAG,
+    tags: Array.from(new Set([...(existingData?.tags || []), FIREBASE_SYSTEM_TAG, "gcoursebuilder", "lms", "supporter"]))
+  };
+
+  const userProfile = {
+    ...ownFields,
     role: assignedRole,
     classification: assignedRole,
     status: existingData?.status || "active",
-    createdAt: existingData?.createdAt || nowIso,
-    lastLoginAt: nowIso,
-    loginCount: loginCount,
-    provider: "google.com",
-    tags: ["lms", "supporter"]
+    createdAt: existingData?.createdAt || nowIso
   };
 
   // Determine Superadmin status dynamically
   userProfile.isSuperAdmin = await verifySuperadminStatus(userProfile);
 
-  // 2. Persist record into Firebase Firestore
-  if (isFirebaseConfigured && db) {
+  // 2. Persist record into Firebase Firestore: a new profile starts as a supporter, an existing
+  // one only gets the user's own fields. isSuperAdmin is worked out at sign-in, never stored.
+  if (isFirebaseConfigured && db && profileExists !== null) {
     try {
       const userRef = doc(db, "users", uid);
-      await setDoc(userRef, userProfile, { merge: true });
+      if (profileExists) {
+        await setDoc(userRef, ownFields, { merge: true });
+      } else {
+        const { isSuperAdmin, ...newProfile } = userProfile;
+        await setDoc(userRef, newProfile);
+      }
     } catch (err) {
       console.warn("[Firebase Database] Failed to write user profile:", err);
     }
@@ -315,6 +334,7 @@ export async function updateUserCategoryInFirebase(targetUid, newCategory) {
       await updateDoc(userRef, {
         role: newCategory,
         classification: newCategory,
+        tag: FIREBASE_SYSTEM_TAG,
         updatedAt: nowIso
       });
     } catch (err) {
