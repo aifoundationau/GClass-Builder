@@ -7,6 +7,7 @@ with invitation fallback for users Classroom refuses to add directly.
 
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 
@@ -426,6 +427,28 @@ class DueDateTests(unittest.TestCase):
         self.assertEqual(parse_due_datetime("2026-11-05T20:00-05:00"),
                          {"dueDate": {"year": 2026, "month": 11, "day": 6}, "dueTime": {"hours": 1, "minutes": 0}})
 
+    def test_browser_offset_ignores_server_time_zone(self):
+        # The browser sends "17:00 Brisbane" as 2026-10-15T17:00+10:00 (withBrowserOffset).
+        # It must land on 07:00 UTC the same day even on a server running on UTC or elsewhere.
+        expected = {"dueDate": {"year": 2026, "month": 10, "day": 15}, "dueTime": {"hours": 7, "minutes": 0}}
+        original = os.environ.get("TZ")
+        try:
+            for tz in ("UTC", "America/New_York", "Australia/Brisbane"):
+                os.environ["TZ"] = tz
+                if hasattr(time, "tzset"):
+                    time.tzset()
+                self.assertEqual(parse_due_datetime("2026-10-15T17:00+10:00"), expected, tz)
+                self.assertEqual(parse_due_datetime("2026-10-15T23:59+10:00"),
+                                 {"dueDate": {"year": 2026, "month": 10, "day": 15},
+                                  "dueTime": {"hours": 13, "minutes": 59}}, tz)
+        finally:
+            if original is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original
+            if hasattr(time, "tzset"):
+                time.tzset()
+
     def test_date_only_is_end_of_day_local_time(self):
         self.assertEqual(parse_due_datetime("2026-11-05"), local_end_of_day_utc(2026, 11, 5))
 
@@ -603,6 +626,27 @@ class QuizAndRubricTests(unittest.TestCase):
             write_quiz_course(path, quiz_rows=[{"Week": "Week 7", "Question": "Lost", "Correct Answers": "x"}])
             with self.assertRaisesRegex(ValueError, "week 'Week 7' is not in the Curriculum sheet"):
                 parse_course_spreadsheet(path)
+
+    def test_duplicate_week_in_curriculum_sheet_is_refused(self):
+        with TempWorkbook() as path:
+            with pd.ExcelWriter(path, engine="openpyxl") as writer:
+                pd.DataFrame([{"Setting": "class_name", "Value": "Maths"}]).to_excel(writer, sheet_name="Course_Settings", index=False)
+                pd.DataFrame([
+                    {"Week": "Week 1", "Module Title": "Numbers 1"},
+                    {"Week": "Week 1", "Module Title": "Numbers 2"},
+                ]).to_excel(writer, sheet_name="Curriculum", index=False)
+            with self.assertRaisesRegex(ValueError, "duplicate Week 'Week 1'"):
+                parse_course_spreadsheet(path)
+
+    def test_duplicate_week_in_attach_quiz_questions_is_refused(self):
+        import classroom_course_engine
+        curriculum = [
+            {"sequence": "Week 4", "title": "Module A", "quiz_questions": []},
+            {"sequence": "Week 4", "title": "Module B", "quiz_questions": []},
+        ]
+        df_quiz = pd.DataFrame([{"Week": "Week 4", "Question": "Q1", "Choices": "A\nB", "Correct Answers": "A"}])
+        with self.assertRaisesRegex(ValueError, "duplicate week 'Week 4'"):
+            classroom_course_engine._attach_quiz_questions(df_quiz, curriculum, "Quiz_Questions")
 
     def test_full_drive_website_links_attach_as_drive_files(self):
         url = "https://drive.google.com/file/d/1Ry05DVSSEQxKwV-_PZdn7KPbWmmZKUwA/view"

@@ -473,22 +473,80 @@ input, textarea, select {
   animation: fadeIn 0.25s ease forwards;
 }
 
-/* Toast Alerts */
-.toast-success {
+/* Toast Alerts: top centre, so they never cover the deployment panel in the bottom-right corner */
+.toast-region {
   position: fixed;
-  bottom: 24px;
-  right: 24px;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 24px));
+  z-index: 1100;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
   background: var(--bg-secondary);
-  border: 1px solid rgba(52, 168, 83, 0.4);
-  box-shadow: var(--shadow-lg), var(--shadow-glow-green);
+  border: 1px solid var(--border-color);
+  border-left-width: 4px;
+  box-shadow: var(--shadow-lg);
   border-radius: var(--radius-md);
-  padding: 14px 20px;
+  padding: 10px 8px 10px 16px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   color: var(--text-main);
-  z-index: 1000;
+  line-height: 1.45;
   animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  padding-top: 2px;
+  overflow-wrap: anywhere;
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.toast-success { border-color: rgba(52, 168, 83, 0.45); border-left-color: #34a853; box-shadow: var(--shadow-lg), var(--shadow-glow-green); }
+.toast-success .toast-icon { color: #34a853; }
+.toast-error { border-color: rgba(234, 67, 53, 0.5); border-left-color: #ea4335; }
+.toast-error .toast-icon { color: #ea4335; }
+.toast-info { border-color: rgba(66, 133, 244, 0.45); border-left-color: #4285f4; }
+.toast-info .toast-icon { color: #4285f4; }
+
+.toast-close {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  margin: -8px 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.toast-close:hover,
+.toast-close:focus-visible {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.toast-close:focus-visible {
+  outline: 2px solid #4285f4;
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; }
 }
 
 /* Login View Styling */
@@ -1920,4 +1978,97 @@ input, textarea, select {
   .rbac-search input {
     width: 130px;
   }
+}
+
+/* Tokens tab (TokensPanel.jsx): token-kit's cards (public/tokens.css), spaced like the app's panels.
+   :not([hidden]) leaves the kit's hidden sections hidden */
+.tokens-panel,
+.tokens-panel #tokensSignedIn:not([hidden]) {
+  display: grid;
+  gap: 20px;
+}
+
+.tokens-panel #tokensSignedOut {
+  max-width: 460px;
+}
+
+/* Role Permissions: everyone in the shared profiles, ticked to receive the selected role */
+.rbac-people-picker {
+  margin-top: 12px;
+}
+
+.rbac-people-search {
+  display: flex;
+  margin-bottom: 8px;
+}
+
+.rbac-people-search input {
+  flex: 1;
+}
+
+.rbac-people {
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
+.rbac-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.rbac-people li:last-child .rbac-person {
+  border-bottom: none;
+}
+
+.rbac-person.picked {
+  background: rgba(168, 85, 247, 0.06);
+}
+
+.rbac-person.fixed {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.rbac-person-who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.rbac-person-who strong,
+.rbac-person-who small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rbac-person-who small {
+  color: var(--text-dim);
+}
+
+.rbac-person-apps {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+}
+
+.rbac-person-role {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: rgba(168, 85, 247, 0.1);
+  color: var(--primary);
+  font-size: 0.72rem;
+  font-weight: 600;
 }

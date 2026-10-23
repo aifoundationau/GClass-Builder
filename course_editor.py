@@ -224,6 +224,9 @@ def _apply(service: Any, course_id: str, kind: str, action: str, item_id: str,
     if "title" not in changes:
         raise EditError("The title cannot be empty.")
     body = {k: v for k, v in changes.items() if v is not None}
+    # Always send a state: without one Classroom makes a hidden draft and says nothing. Draft is
+    # the safe default (students see nothing until the teacher publishes); the editor sends its choice.
+    body["state"] = changes.get("state") or "DRAFT"
     if kind == "assignment":
         body["workType"] = "ASSIGNMENT"
     elif kind == "question":

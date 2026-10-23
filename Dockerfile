@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application backend files (every module api_server.py imports)
 COPY api_server.py agent_routes.py teacher_auth.py classroom_api.py classroom_course_engine.py \
      course_agent.py course_developer.py course_editor.py ai_model_router.py standards.py \
-     stripe_lms_service.py ./
+     stripe_lms_service.py gmail_service.py ./
 COPY course_curriculum.xlsx credentials.example.json ./
 
 # Copy built frontend assets from stage 1 into dist/

@@ -43,7 +43,7 @@ export const CURRICULUM_COLUMNS = [
   { header: 'Assignment Instructions', key: 'assignment_instructions', type: 'text', required: 'NO', description: 'Instructions for the assignment.' },
   { header: 'Assignment Rubric (Google Sheet URL)', key: 'rubric_url', type: 'text', required: 'NO', description: "Full link to a Google Sheet in Classroom's rubric format (the sheet you would use with Rubric > Import from Sheets). It becomes the assignment's rubric. If Classroom refuses it, the link is put in the assignment description." },
   { header: 'Points', key: 'points', type: 'points', required: 'NO', description: 'Points for the assignment (default 100). 0 means ungraded.' },
-  { header: 'Due Date', key: 'due_date', type: 'date', required: 'NO', description: "ISO 8601 only: 2026-10-15 (due 23:59 that day), 2026-10-15T17:00 for a time, or with an offset such as 2026-10-15T17:00+11:00. Without an offset, times are in the time zone of the computer running Course Builder. Applies to the week's assignment, quiz and question." },
+  { header: 'Due Date', key: 'due_date', type: 'date', required: 'NO', description: "ISO 8601 only: 2026-10-15 (due 23:59 that day), 2026-10-15T17:00 for a time, or with an offset such as 2026-10-15T17:00+11:00. Without an offset, times are in the time zone of the browser used to deploy the course. Applies to the week's assignment, quiz and question." },
   { header: 'Quiz assignment', key: 'quiz_title', type: 'text', required: 'NO', description: "Title of the week's quiz." },
   { header: 'Quiz URL', key: 'quiz_url', type: 'text', required: 'NO', description: 'An existing Google Form to use as the quiz, attached as a link. Leave empty when the quiz is written on the Quiz_Questions sheet: Course Builder then creates the form.' },
   { header: 'Quiz Points', key: 'quiz_points', type: 'points', required: 'NO', description: 'Points for a quiz given by Quiz URL (default 50). A quiz from Quiz_Questions is worth the total of its questions.' },
@@ -135,7 +135,8 @@ const SHEET_LINK = /^https:\/\/(?:docs\.google\.com\/(?:a\/[^/]+\/)?spreadsheets
 export const isSheetLink = (url) => SHEET_LINK.test(String(url || '').trim());
 
 // Due dates are ISO 8601: a date (due 23:59), a date and time, or either with an offset.
-// A time without an offset is in this computer's time zone.
+// A time without an offset is in the teacher's browser time zone: withBrowserOffset() adds
+// that offset before the date is sent, so the server's own time zone never matters.
 const ISO_DUE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
 export const isIsoDue = (value) => {
   const text = String(value || '').trim();
@@ -144,6 +145,23 @@ export const isIsoDue = (value) => {
 export const splitDue = (value) => {
   const m = String(value || '').match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2}))?/);
   return m ? { date: m[1], time: m[2] || '' } : { date: '', time: '' };
+};
+
+// "2026-10-15" -> "2026-10-15T23:59+10:00"; "2026-10-15T17:00" -> "2026-10-15T17:00+10:00".
+// The offset is the browser's offset on that date, so daylight saving is handled. Values that
+// already carry an offset (or Z), blanks and malformed text are returned unchanged.
+export const withBrowserOffset = (value) => {
+  const text = String(value ?? '').trim();
+  const m = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (!m) return text;
+  const [, y, mo, d, hh = '23', mi = '59', ss] = m;
+  const local = new Date(Number(y), Number(mo) - 1, Number(d), Number(hh), Number(mi));
+  if (Number.isNaN(local.getTime())) return text;
+  const minutes = -local.getTimezoneOffset();
+  const abs = Math.abs(minutes);
+  const pad = (n) => String(n).padStart(2, '0');
+  const offset = `${minutes >= 0 ? '+' : '-'}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+  return `${y}-${mo}-${d}T${hh}:${mi}${ss ? `:${ss}` : ''}${offset}`;
 };
 
 // Excel stores a date cell as a count of days (with the time as a fraction) since 30 Dec 1899,
@@ -550,9 +568,21 @@ export function importCourseWorkbook(data) {
   if (quizSheet && curriculum.length) {
     const grid = XLSX.utils.sheet_to_json(wb.Sheets[quizSheet], { header: 1, defval: '' });
     const keys = (grid[0] || []).map(h => guessQuizColumnKey(norm(h)));
-    const byWeek = Object.fromEntries(curriculum.map(m => [weekKey(m.sequence), m]));
+    const byWeek = {};
+    const seenWeeks = new Set();
+    const duplicateWeeks = new Set();
+    for (const m of curriculum) {
+      const k = weekKey(m.sequence);
+      if (seenWeeks.has(k)) {
+        duplicateWeeks.add(m.sequence);
+      }
+      seenWeeks.add(k);
+      byWeek[k] = m;
+    }
+    if (duplicateWeeks.size > 0) {
+      warnings.push(`Curriculum contains duplicate week names (${[...duplicateWeeks].join(', ')}). Each week must have a distinct Week label so quiz questions can be attached to the right week.`);
+    }
     grid.slice(1).forEach((cells, i) => {
-      if (!cells.some(c => String(c ?? '').trim() !== '')) return;
       const raw = {};
       keys.forEach((key, c) => { if (key && raw[key] === undefined) raw[key] = cells[c]; });
       const where = `${quizSheet} row ${i + 2}`;

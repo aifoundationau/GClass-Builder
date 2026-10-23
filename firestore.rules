@@ -1,72 +1,177 @@
 rules_version = '2';
 
-// Firestore security rules for GCourse Builder (#gcoursebuilder), with role-based access control.
-//
-// A user's role is the "role" custom claim on their sign-in when there is one (superadmins, set
-// by scripts/rbac-admin.mjs), else the role a superadmin assigned to their verified email in
-// /role_assignments, else "supporter". What a role may do is the permissions list in
-// /roles/{role}, which only a superadmin can change. src/rbac/PermissionContext.jsx works the role
-// out the same way for the UI.
-//
-// Deploying this file replaces every rule in the project's (default) database: an app sharing the
-// project needs its rules merged in here first. roleKeys() and permissionKeys() must match
-// src/rbac/permissions.js (npm run check:rbac compares them).
+// One set of rules for every app sharing ai-foundation-firebase (AI Foundation, the LMS, token-kit apps,
+// GCourse Builder and others). Deploy only from the AI Foundation folder:
+//   firebase deploy --only firestore:rules --project ai-foundation-firebase
+// An app's own collections carry its tag as a prefix (aifoundation_token_checkouts, gcoursebuilder_roles), so no
+// two apps share a collection by accident. The SuperAdmin is the owner in every app (isSuperAdmin, from the sign-in);
+// every other role and permission belongs to one app, in its own collections. List each new collection in
+// isProtectedCollection, with its own rules.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function signedIn() {
+    function isAuthenticated() {
       return request.auth != null;
     }
 
-    function isOwner(uid) {
-      return signedIn() && request.auth.uid == uid;
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function claimRole() {
-      return request.auth.token.get('role', '');
+    // SuperAdmins: matched by UID, or by email only when Google has verified that email
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        request.auth.uid in ['ZK79FRQoVlYhsgvMibhi81dRUWj2', 'L5euSJAfNKdDOX6mT0qmrCGjUA53'] ||
+        (request.auth.token.email_verified == true && request.auth.token.email in [
+          'support@aifoundation.net.au',
+          'davidrobertson.info@gmail.com'
+        ])
+      );
     }
 
-    function isSuperadmin() {
-      return signedIn() && claimRole() == 'superadmin';
+    // Admins: SuperAdmins, or users whose profile role was set to admin by a SuperAdmin / the server
+    function isAdmin() {
+      return isSuperAdmin() || (
+        isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['admin', 'super_admin', 'superadmin']
+      );
     }
 
-    function hasVerifiedEmail() {
+    // Collections holding PII or authorization data. Excluded from the catch-all rule below,
+    // because Firestore rules are OR'd and a broad match would otherwise override these.
+    function isProtectedCollection(name) {
+      return name in ['users', 'transactions', 'stripe_transactions', 'paypal_transactions',
+                      'chat_interactions', 'system_settings', 'admins', 'content',
+                      'token_ledger', 'aifoundation_token_checkouts', 'token_checkouts',
+                      'gcoursebuilder_roles', 'gcoursebuilder_role_assignments'];
+    }
+
+    // Profile fields that grant privileges or hold value; users can never set or change these themselves.
+    // token_balance is the token balance every app shares: only servers change it (service account)
+    function privilegedFields() {
+      return ['role', 'status', 'classification', 'isSuperAdmin', 'isAdmin', 'tags',
+              'token_balance', 'token_balance_updated_at'];
+    }
+
+    // AI Foundation Content (Articles, Projects, Tech, Community)
+    // Anyone can read public content; only admins can publish, edit or delete
+    match /content/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // User Profiles (PII): readable by the owner and admins only
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isSuperAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.get('role', 'supporter') == 'supporter' &&
+        request.resource.data.get('status', 'supporter') == 'supporter' &&
+        request.resource.data.get('isSuperAdmin', false) == false &&
+        request.resource.data.get('isAdmin', false) == false &&
+        request.resource.data.get('token_balance', 0) == 0 &&
+        !request.resource.data.keys().hasAny(['tags', 'token_balance_updated_at'])
+      );
+      allow update: if isSuperAdmin() || (
+        isOwner(userId) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(privilegedFields())
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    // Transactions / Checkout Records (PII): written only by the server (service account)
+    match /{txCollection}/{txId} {
+      allow read: if txCollection in ['stripe_transactions', 'paypal_transactions'] && isAdmin();
+      allow write: if false;
+    }
+    match /transactions/{txId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Supporter Chat & Administrative Messaging (Multi-Tenant)
+    // - Supporters can only send as themselves
+    // - SuperAdmin can read all messages from ALL tenants
+    // - Normal supporters can ONLY read their own messages
+    // - Only SuperAdmin can delete or modify records
+    match /chat_interactions/{msgId} {
+      allow create: if isAuthenticated() && request.resource.data.senderUid == request.auth.uid;
+      allow read: if isSuperAdmin() || (
+        isAuthenticated() && (
+          request.auth.uid == resource.data.senderUid ||
+          request.auth.uid == resource.data.recipientUid
+        )
+      );
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Token ledger: one entry per change to a token balance (purchase, grant or spend). Users read their own entries;
+    // only servers write them (service account), in the same commit as the balance change
+    match /token_ledger/{entryId} {
+      allow read: if (isAuthenticated() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow write: if false;
+    }
+
+    // Token checkouts not paid yet (Buy Tokens): server only, readable by the owner and admins
+    match /aifoundation_token_checkouts/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if false;
+    }
+    // The same for the owner's other apps (token-kit), one document per app and user: {appTag}_{uid}
+    match /token_checkouts/{docId} {
+      allow read: if (isAuthenticated() && resource.data.uid == request.auth.uid) || isAdmin();
+      allow write: if false;
+    }
+
+    // Admin email lists used for authorization (PII)
+    match /system_settings/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+    match /admins/{docId} {
+      allow read, write: if isSuperAdmin();
+    }
+
+    // GCourse Builder (tag gcoursebuilder): role-based access control, from the app's firestore.rules (which its
+    // emulator tests use). Its profiles follow the users rules above.
+    // The SuperAdmin is the owner, as in every app: isSuperAdmin() above, from the sign-in's UID or verified email.
+    // Every other role is the app's own: the role the SuperAdmin gave the person's verified email in
+    // gcoursebuilder_role_assignments, else supporter. What a role may do is the permissions list in
+    // gcoursebuilder_roles/{role}. gcbRoleKeys() and gcbPermissionKeys() must match the app's src/rbac/permissions.js.
+    function gcbHasVerifiedEmail() {
       return request.auth.token.get('email', '') != ''
         && request.auth.token.get('email_verified', false) == true;
     }
 
-    // Only call after hasVerifiedEmail()
-    function assignmentPath() {
-      return /databases/$(database)/documents/role_assignments/$(request.auth.token.email.lower());
+    // Only call after gcbHasVerifiedEmail()
+    function gcbAssignmentPath() {
+      return /databases/$(database)/documents/gcoursebuilder_role_assignments/$(request.auth.token.email.lower());
     }
 
-    function roleGrants(role, perm) {
-      return exists(/databases/$(database)/documents/roles/$(role))
-        && perm in get(/databases/$(database)/documents/roles/$(role)).data.permissions;
+    function gcbRoleGrants(role, perm) {
+      return exists(/databases/$(database)/documents/gcoursebuilder_roles/$(role))
+        && perm in get(/databases/$(database)/documents/gcoursebuilder_roles/$(role)).data.permissions;
     }
 
-    // Without a claim: the role assigned to the verified email, else supporter
-    function assignedRoleGrants(perm) {
-      return (hasVerifiedEmail() && exists(assignmentPath())
-          && roleGrants(get(assignmentPath()).data.role, perm))
-        || (!(hasVerifiedEmail() && exists(assignmentPath())) && roleGrants('supporter', perm));
+    // The role assigned to the verified email, else supporter
+    function gcbAssignedRoleGrants(perm) {
+      return (gcbHasVerifiedEmail() && exists(gcbAssignmentPath())
+          && gcbRoleGrants(get(gcbAssignmentPath()).data.role, perm))
+        || (!(gcbHasVerifiedEmail() && exists(gcbAssignmentPath())) && gcbRoleGrants('supporter', perm));
     }
 
-    // True when the signed-in user's role includes `perm`. Superadmin holds every permission.
-    function hasPermission(perm) {
-      return signedIn() && (
-        isSuperadmin()
-        || (claimRole() != '' && roleGrants(claimRole(), perm))
-        || (claimRole() == '' && assignedRoleGrants(perm))
-      );
+    // True when the signed-in user's role includes perm. The SuperAdmin holds every permission
+    function gcbHasPermission(perm) {
+      return isAuthenticated() && (isSuperAdmin() || gcbAssignedRoleGrants(perm));
     }
 
-    function roleKeys() {
+    function gcbRoleKeys() {
       return ['superadmin', 'chancellor', 'president', 'ceo', 'coo', 'cfo', 'accounting', 'administration',
               'teacher', 'student', 'supporter'];
     }
 
-    function permissionKeys() {
+    function gcbPermissionKeys() {
       return [
         'courses.view', 'courses.create', 'courses.publish', 'grades.view', 'grades.edit', 'classroom.manage',
         'applications.view', 'applications.review', 'applications.export', 'students.manage',
@@ -77,99 +182,57 @@ service cloud.firestore {
     }
 
     // { roleName, permissions, updatedAt, updatedBy }, stamped by the writer at the server's time.
-    // Superadmin must keep every permission, so it cannot be locked out.
-    function isValidRoleDoc(roleId) {
+    // The superadmin role must keep every permission, so it can't be locked out
+    function gcbIsValidRoleDoc(roleId) {
       let data = request.resource.data;
-      return roleId in roleKeys()
+      return roleId in gcbRoleKeys()
         && data.keys().hasAll(['roleName', 'permissions', 'updatedAt', 'updatedBy'])
         && data.keys().hasOnly(['roleName', 'permissions', 'updatedAt', 'updatedBy'])
         && data.roleName is string && data.roleName.size() > 0 && data.roleName.size() <= 60
         && data.permissions is list
-        && data.permissions.size() <= permissionKeys().size()
+        && data.permissions.size() <= gcbPermissionKeys().size()
         && data.permissions.toSet().size() == data.permissions.size()
-        && data.permissions.hasOnly(permissionKeys())
-        && (roleId != 'superadmin' || data.permissions.hasAll(permissionKeys()))
+        && data.permissions.hasOnly(gcbPermissionKeys())
+        && (roleId != 'superadmin' || data.permissions.hasAll(gcbPermissionKeys()))
         && data.updatedAt == request.time
         && data.updatedBy == request.auth.uid;
     }
 
-    // { email, role, assignedAt, assignedBy } at the lower-case email. Superadmin is never assigned
-    // by email: it needs the claim, which only the Admin SDK can set.
-    function isValidAssignment(email) {
+    // { email, role, assignedAt, assignedBy } at the lower-case email. Superadmin is never assigned: it is the owner
+    function gcbIsValidAssignment(email) {
       let data = request.resource.data;
       return email == email.lower()
         && email.matches('[^@ /]+@[^@ /]+[.][^@ /]+')
         && data.keys().hasAll(['email', 'role', 'assignedAt', 'assignedBy'])
         && data.keys().hasOnly(['email', 'role', 'assignedAt', 'assignedBy'])
         && data.email == email
-        && data.role in roleKeys()
+        && data.role in gcbRoleKeys()
         && data.role != 'superadmin'
         && data.assignedAt == request.time
         && data.assignedBy == request.auth.uid;
     }
 
-    // Role permissions: readable when signed in, written only by the superadmin claim
-    match /roles/{roleId} {
-      allow read: if signedIn();
-      allow create, update: if isSuperadmin() && isValidRoleDoc(roleId);
+    // Role permissions: readable when signed in, written only by the SuperAdmin
+    match /gcoursebuilder_roles/{roleId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isSuperAdmin() && gcbIsValidRoleDoc(roleId);
       allow delete: if false;
     }
 
-    // Roles given to email addresses. People can read their own; superadmins change them.
-    match /role_assignments/{email} {
-      allow read: if isSuperadmin()
-        || hasPermission('users.manage')
-        || (signedIn() && hasVerifiedEmail() && request.auth.token.email.lower() == email);
-      allow create, update: if isSuperadmin() && isValidAssignment(email);
-      allow delete: if isSuperadmin();
+    // Roles given to email addresses: people can read their own; the SuperAdmin changes them
+    match /gcoursebuilder_role_assignments/{email} {
+      allow read: if isSuperAdmin()
+        || gcbHasPermission('users.manage')
+        || (isAuthenticated() && gcbHasVerifiedEmail() && request.auth.token.email.lower() == email);
+      allow create, update: if isSuperAdmin() && gcbIsValidAssignment(email);
+      allow delete: if isSuperAdmin();
     }
 
-    // Profiles written at sign-in (firebaseAuthService.syncUserToFirebase). People keep their own
-    // profile but cannot give themselves a role or admin flag; users.manage can edit profiles but
-    // not the admin flags, which only a superadmin sets.
-    function protectedUserFields() {
-      return ['role', 'classification', 'status', 'isSuperAdmin', 'isAdmin'];
+    // Fallback for other tenants' collections (unchanged behaviour),
+    // excluding the protected collections above
+    match /{collectionName}/{document=**} {
+      allow read: if !isProtectedCollection(collectionName);
+      allow write: if isAuthenticated() && !isProtectedCollection(collectionName);
     }
-
-    function changes(fields) {
-      return request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
-    }
-
-    match /users/{uid} {
-      allow read: if isOwner(uid) || hasPermission('users.manage');
-      allow create: if isOwner(uid)
-        && request.resource.data.get('role', 'supporter') in ['supporter', 'Supporter']
-        && request.resource.data.get('classification', 'supporter') in ['supporter', 'Supporter']
-        && request.resource.data.get('isSuperAdmin', false) == false
-        && request.resource.data.get('isAdmin', false) == false;
-      allow update: if isSuperadmin()
-        || (isOwner(uid) && !changes(protectedUserFields()))
-        || (hasPermission('users.manage') && !changes(['isSuperAdmin', 'isAdmin']));
-      allow delete: if false;
-    }
-
-    // Older superadmin lists read at sign-in (firebaseAuthService.verifySuperadminStatus). People
-    // can look up their own entry (by uid or verified email), never the whole list.
-    function isOwnEntry(id) {
-      return signedIn()
-        && (id == request.auth.uid || (hasVerifiedEmail() && id == request.auth.token.email.lower()));
-    }
-
-    match /admins/{id} {
-      allow read: if isOwnEntry(id) || isSuperadmin();
-      allow create, update: if isSuperadmin();
-    }
-
-    match /superadmins/{id} {
-      allow read: if isOwnEntry(id) || isSuperadmin();
-      allow create, update: if isSuperadmin();
-    }
-
-    // system_config/admin lists admin emails: superadmins only
-    match /system_config/{id} {
-      allow read, create, update: if isSuperadmin();
-    }
-
-    // Everything else is closed.
   }
 }

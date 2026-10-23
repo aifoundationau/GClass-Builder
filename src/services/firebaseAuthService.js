@@ -8,92 +8,24 @@ import {
   signOut, 
   onAuthStateChanged 
 } from "firebase/auth";
-import { 
-  doc, 
-  getDoc, 
-  setDoc, 
-  updateDoc, 
-  collection, 
-  getDocs, 
-  onSnapshot 
+import {
+  doc,
+  getDoc,
+  setDoc,
+  collection,
+  getDocs,
+  onSnapshot
 } from "firebase/firestore";
-import { auth, db, googleProvider, isFirebaseConfigured, FIREBASE_SYSTEM_TAG } from "../firebase";
-import { DEFAULT_ROLE } from "../rbac/permissions";
+import { auth, db, googleProvider, isFirebaseConfigured } from "../firebase";
+import { isOwnerAccount } from "../rbac/permissions";
 
-// Standard Role Categories per specification
-export const USER_CATEGORIES = [
-  "Supporter",       // Default for all new Google registrations
-  "student",
-  "teacher",
-  "admin staff",
-  "CEO",
-  "COO",
-  "CFO",
-  "Financial team",
-  "Superadmin"
-];
-
-// Helper: Determine if a user record represents a Superadmin (zero hardcoding)
+// The Superadmin is the owner, as in every app sharing the Firebase project: one of the owner's
+// Google accounts, recognised from the sign-in by uid or verified email (src/rbac/permissions.js)
 export async function verifySuperadminStatus(userRecord) {
-  if (!userRecord || !userRecord.email) return false;
-
-  const emailLower = userRecord.email.toLowerCase();
-  const roleLower = String(userRecord.role || userRecord.classification || "").toLowerCase();
-
-  // 1. Direct role inspection
-  if (
-    roleLower === "superadmin" || 
-    roleLower === "admin" || 
-    roleLower === "school_admin" || 
-    userRecord.isAdmin === true || 
-    userRecord.isSuperAdmin === true
-  ) {
-    return true;
-  }
-
-  // 2. Optional Environment Variable check (if configured in hosting env)
-  const envAdmin = (import.meta.env.VITE_FIREBASE_ADMIN_EMAIL || "").toLowerCase().trim();
-  if (envAdmin && emailLower === envAdmin) {
-    return true;
-  }
-
-  // 3. Inspect Firestore 'admins' / 'superadmins' collections if Firebase is connected
-  if (isFirebaseConfigured && db) {
-    try {
-      // Check admins collection by UID
-      if (userRecord.uid) {
-        const adminUidDoc = await getDoc(doc(db, "admins", userRecord.uid));
-        if (adminUidDoc.exists()) return true;
-
-        const superadminUidDoc = await getDoc(doc(db, "superadmins", userRecord.uid));
-        if (superadminUidDoc.exists()) return true;
-      }
-
-      // Check admins collection by Email
-      const adminEmailDoc = await getDoc(doc(db, "admins", emailLower));
-      if (adminEmailDoc.exists()) return true;
-
-      const superadminEmailDoc = await getDoc(doc(db, "superadmins", emailLower));
-      if (superadminEmailDoc.exists()) return true;
-
-      // Check system_config/admin doc (firestore.rules let only superadmins read it)
-      const configDoc = await getDoc(doc(db, "system_config", "admin")).catch((err) => {
-        if (err.code === "permission-denied") return null;
-        throw err;
-      });
-      if (configDoc && configDoc.exists()) {
-        const configData = configDoc.data();
-        const adminList = configData.adminEmails || configData.admins || [];
-        if (Array.isArray(adminList) && adminList.map(e => String(e).toLowerCase()).includes(emailLower)) {
-          return true;
-        }
-      }
-    } catch (err) {
-      console.warn("[Firebase Auth] Superadmin remote verification error:", err);
-    }
-  }
-
-  return false;
+  if (!userRecord) return false;
+  const signedIn = auth.currentUser;
+  const emailVerified = Boolean(signedIn && signedIn.uid === userRecord.uid && signedIn.emailVerified);
+  return isOwnerAccount({ uid: userRecord.uid, email: userRecord.email, emailVerified });
 }
 
 // Synchronize Google User profile to Firebase Database
@@ -133,13 +65,9 @@ export async function syncUserToFirebase(authUser) {
 
   const nowIso = new Date().toISOString();
 
-  // Requirement 5: People log in with Google, then become Supporters immediately as their classification
-  // If they already have an assigned category (changed by Superadmin), preserve it!
-  const assignedRole = existingData?.role || existingData?.classification || DEFAULT_ROLE;
-  const loginCount = (existingData?.loginCount || 0) + 1;
-
-  // What users may write about themselves. firestore.rules refuse changes to role,
-  // classification, status and the admin flags, which only a Superadmin sets.
+  // What the app writes about the person in their shared profile (one per person for all the
+  // owner's apps). Roles are this app's own (Role Permissions), so it never writes role,
+  // classification, status or tags, which belong to the shared profile.
   const ownFields = {
     uid: uid,
     email: email,
@@ -148,33 +76,22 @@ export async function syncUserToFirebase(authUser) {
     photoURL: photoURL,
     avatar: photoURL,
     lastLoginAt: nowIso,
-    provider: "google.com",
-    tag: FIREBASE_SYSTEM_TAG,
-    tags: Array.from(new Set([...(existingData?.tags || []), FIREBASE_SYSTEM_TAG, "gcoursebuilder", "lms", "supporter"]))
+    provider: "google.com"
   };
 
   const userProfile = {
     ...ownFields,
-    role: assignedRole,
-    classification: assignedRole,
-    status: existingData?.status || "active",
     createdAt: existingData?.createdAt || nowIso
   };
 
-  // Determine Superadmin status dynamically
+  // The Superadmin is the owner; worked out at sign-in, never stored
   userProfile.isSuperAdmin = await verifySuperadminStatus(userProfile);
 
-  // 2. Persist record into Firebase Firestore: a new profile starts as a supporter, an existing
-  // one only gets the user's own fields. isSuperAdmin is worked out at sign-in, never stored.
-  if (isFirebaseConfigured && db && profileExists !== null) {
+  // 2. Update the profile in Firestore. The token server creates it on first sign-in
+  // (POST /api/profile/sync, src/services/tokenAuthBridge.js) with the shared starting values.
+  if (isFirebaseConfigured && db && profileExists) {
     try {
-      const userRef = doc(db, "users", uid);
-      if (profileExists) {
-        await setDoc(userRef, ownFields, { merge: true });
-      } else {
-        const { isSuperAdmin, ...newProfile } = userProfile;
-        await setDoc(userRef, newProfile);
-      }
+      await setDoc(doc(db, "users", uid), ownFields, { merge: true });
     } catch (err) {
       console.warn("[Firebase Database] Failed to write user profile:", err);
     }
@@ -204,9 +121,14 @@ export async function signInWithGoogle() {
       return await syncUserToFirebase(result.user);
     }
   } catch (error) {
+    // If the user deliberately closed or cancelled the popup, respect their cancellation without redirecting
+    if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
+      console.info("[Firebase Auth] User closed or cancelled sign-in popup.");
+      throw error;
+    }
     console.warn("[Firebase Auth] Popup blocked or failed, attempting redirect:", error);
-    // If popup was blocked or unsupported, fallback smoothly to redirect
-    if (error.code === 'auth/popup-blocked' || error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-popup-request') {
+    // If popup was blocked by browser, fallback to redirect
+    if (error.code === 'auth/popup-blocked') {
       try {
         await signInWithRedirect(auth, googleProvider);
         return null; // Will resume upon redirect completion
@@ -233,7 +155,7 @@ export async function checkRedirectAuthResult() {
   return null;
 }
 
-// Log out user completely
+// Log out user completely and purge cached user profiles from browser storage
 export async function logOutUser() {
   try {
     await signOut(auth);
@@ -243,6 +165,15 @@ export async function logOutUser() {
   try {
     localStorage.removeItem("gcb_active_user");
     localStorage.removeItem("gcb_user_session");
+    // Clear all cached user profiles on sign out for privacy/security
+    const keysToRemove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith("gcb_user_") || key.startsWith("gcb_draft_"))) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach(k => localStorage.removeItem(k));
   } catch (e) {}
 }
 
@@ -318,50 +249,4 @@ export async function getAllUsersFromFirebase() {
   } catch (e) {}
 
   return users;
-}
-
-// Superadmin Feature: Update any user's category/classification
-// Requirement 6: Superadmin can change any user category (student, teacher, admin staff, CEO, COO, CFO, Financial team, Supporter)
-export async function updateUserCategoryInFirebase(targetUid, newCategory) {
-  if (!targetUid || !newCategory) throw new Error("Missing user UID or category.");
-
-  const nowIso = new Date().toISOString();
-
-  // 1. Update in Firestore if configured
-  if (isFirebaseConfigured && db) {
-    try {
-      const userRef = doc(db, "users", targetUid);
-      await updateDoc(userRef, {
-        role: newCategory,
-        classification: newCategory,
-        tag: FIREBASE_SYSTEM_TAG,
-        updatedAt: nowIso
-      });
-    } catch (err) {
-      console.warn("[Firebase Database] Update user doc error:", err);
-    }
-  }
-
-  // 2. Update local storage mirror
-  try {
-    const cached = localStorage.getItem(`gcb_user_${targetUid}`);
-    if (cached) {
-      const parsed = JSON.parse(cached);
-      parsed.role = newCategory;
-      parsed.classification = newCategory;
-      parsed.updatedAt = nowIso;
-      localStorage.setItem(`gcb_user_${targetUid}`, JSON.stringify(parsed));
-    }
-    const active = localStorage.getItem("gcb_active_user");
-    if (active) {
-      const activeParsed = JSON.parse(active);
-      if (activeParsed.uid === targetUid) {
-        activeParsed.role = newCategory;
-        activeParsed.classification = newCategory;
-        localStorage.setItem("gcb_active_user", JSON.stringify(activeParsed));
-      }
-    }
-  } catch (e) {}
-
-  return { success: true, uid: targetUid, role: newCategory };
 }

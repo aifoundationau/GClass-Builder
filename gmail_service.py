@@ -7,6 +7,7 @@ import os
 import json
 import base64
 import urllib.parse
+import html
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, timezone
@@ -42,24 +43,53 @@ PERMISSION_CATALOG = {
     "api_keys.manage": {"label": "Manage API Keys & Integrations", "desc": "Configure Gemini API keys, Firebase service accounts, and external credentials."},
     "campus_metrics.manage": {"label": "Manage Front Page Campus Metrics", "desc": "Adjust front page headline statistics and institutional metrics."}
 }
+ 
+ 
+def mask_email_pii(email: Optional[str]) -> str:
+    """Mask email for data minimization and PII protection."""
+    if not email or "@" not in email:
+        return "hidden"
+    user, domain = email.split("@", 1)
+    if len(user) <= 2:
+        masked_user = user[0] + "*"
+    else:
+        masked_user = user[0] + "*" * (len(user) - 2) + user[-1]
+    return f"{masked_user}@{domain}"
 
 
 def build_email_content(recipient_email: str, role_key: str, role_label: str, permissions: List[str], admin_email: Optional[str] = None) -> Dict[str, str]:
     """Generates a professional HTML and plain text email body detailing granted role and permissions."""
+    safe_recipient = html.escape(str(recipient_email))
+    safe_role_label = html.escape(str(role_label))
+    safe_admin = html.escape(str(admin_email)) if admin_email else None
+
     subject = f"🎓 Role Granted: You have been assigned the {role_label} role [{SYSTEM_TAG}]"
 
     perm_items_html = []
     perm_items_text = []
 
     for p in permissions:
-        info = PERMISSION_CATALOG.get(p, {"label": p, "desc": "System capability."})
+        if not isinstance(p, str):
+            continue
+        info = PERMISSION_CATALOG.get(p)
+        if info:
+            lbl_html = html.escape(info['label'])
+            desc_html = html.escape(info['desc'])
+            lbl_text = info['label']
+            desc_text = info['desc']
+        else:
+            lbl_html = html.escape(p)
+            desc_html = "System capability."
+            lbl_text = p
+            desc_text = "System capability."
+
         perm_items_html.append(f"""
             <li style="margin-bottom: 10px; padding: 10px 14px; background: #f8fafc; border-left: 3px solid #4285f4; border-radius: 4px;">
-                <strong style="color: #1e293b; font-size: 14px;">{info['label']}</strong><br/>
-                <span style="color: #64748b; font-size: 13px;">{info['desc']}</span>
+                <strong style="color: #1e293b; font-size: 14px;">{lbl_html}</strong><br/>
+                <span style="color: #64748b; font-size: 13px;">{desc_html}</span>
             </li>
         """)
-        perm_items_text.append(f"  * {info['label']}: {info['desc']}")
+        perm_items_text.append(f"  * {lbl_text}: {desc_text}")
 
     html_content = f"""
     <!DOCTYPE html>
@@ -88,8 +118,8 @@ def build_email_content(recipient_email: str, role_key: str, role_label: str, pe
                 <span class="badge">Role Assignment</span>
                 <h2 style="margin: 0 0 14px 0; color: #0f172a; font-size: 20px;">Hello,</h2>
                 <p style="color: #334155; font-size: 15px; line-height: 1.6; margin-top: 0;">
-                    Your Google account (<strong>{recipient_email}</strong>) has been officially granted the 
-                    <strong style="color: #1a73e8;">{role_label}</strong> role on Google Course Builder.
+                    Your Google account (<strong>{safe_recipient}</strong>) has been officially granted the 
+                    <strong style="color: #1a73e8;">{safe_role_label}</strong> role on Google Course Builder.
                 </p>
 
                 <h3 style="color: #0f172a; font-size: 16px; margin: 24px 0 12px 0;">Granted Permissions & Capabilities:</h3>
@@ -100,7 +130,7 @@ def build_email_content(recipient_email: str, role_key: str, role_label: str, pe
                 <div style="margin-top: 28px; padding: 18px; background: #eff6ff; border-radius: 8px; border: 1px solid #bfdbfe;">
                     <strong style="color: #1e40af; font-size: 14px;">How to activate your access:</strong>
                     <p style="color: #1e3a8a; font-size: 13px; margin: 6px 0 0 0; line-height: 1.5;">
-                        Simply log in with your Google Account using <strong>{recipient_email}</strong>. 
+                        Simply log in with your Google Account using <strong>{safe_recipient}</strong>. 
                         Your specific role and permissions will activate automatically upon sign-in.
                     </p>
                 </div>
@@ -110,7 +140,7 @@ def build_email_content(recipient_email: str, role_key: str, role_label: str, pe
                 </div>
             </div>
             <div class="footer">
-                Tag: <strong>{SYSTEM_TAG}</strong> &bull; Assigned by {admin_email or 'System Administrator'}<br/>
+                Tag: <strong>{SYSTEM_TAG}</strong> &bull; Assigned by {safe_admin or 'System Administrator'}<br/>
                 This is an automated administrative notification from Google Course Builder LMS.
             </div>
         </div>
@@ -165,54 +195,45 @@ def send_role_notification_via_gmail(
     raw_encoded = base64.urlsafe_b64encode(mime_message.as_bytes()).decode("utf-8")
 
     sent = False
-    send_method = "logged"
+    send_method = "web_compose"
     error_msg = None
     response_payload = {}
 
-    # 2. Attempt sending via Google Gmail API
-    try:
-        import teacher_auth
-        # Try loading credentials for admin_email or any active session
-        sender = admin_email
-        creds = None
-        if sender:
-            creds = teacher_auth.load_credentials(sender)
-        
-        # If no specific admin creds, find the first valid stored teacher token
-        if not creds and os.path.exists(teacher_auth.TEACHER_DIR):
-            for fname in os.listdir(teacher_auth.TEACHER_DIR):
-                if fname.endswith(".json") and not fname.startswith("_"):
-                    fpath = os.path.join(teacher_auth.TEACHER_DIR, fname)
-                    try:
-                        with open(fpath, "r", encoding="utf-8") as f:
-                            tdata = json.load(f)
-                        from google.oauth2.credentials import Credentials
-                        c = Credentials.from_authorized_user_info(tdata)
-                        if c.valid or c.refresh_token:
-                            creds = c
-                            break
-                    except Exception:
-                        continue
+    # 2. Attempt sending via Google Gmail API ONLY for the authenticated admin's own credentials
+    if admin_email:
+        try:
+            import teacher_auth
+            creds = teacher_auth.load_credentials(admin_email)
 
-        if creds:
-            from googleapiclient.discovery import build
-            from google.auth.transport.requests import Request
-            if not creds.valid and creds.refresh_token:
-                creds.refresh(Request())
-            
-            gmail_service = build("gmail", "v1", credentials=creds, cache_discovery=False)
-            result = gmail_service.users().messages().send(
-                userId="me",
-                body={"raw": raw_encoded}
-            ).execute()
-            
-            sent = True
-            send_method = "gmail_api"
-            response_payload = result
-            print(f"[GMAIL API] Successfully sent role notification to {recipient_email}. Message ID: {result.get('id')}")
-    except Exception as exc:
-        error_msg = str(exc)
-        print(f"[GMAIL API WARN] Direct Gmail API send could not complete: {exc}")
+            if creds:
+                # Check if credentials have the gmail.send scope before calling the API
+                granted_scopes = getattr(creds, "scopes", []) or []
+                has_gmail_scope = False
+                if isinstance(granted_scopes, (list, tuple, set)):
+                    has_gmail_scope = any("gmail.send" in str(s) or "mail.google.com" in str(s) for s in granted_scopes)
+
+                if has_gmail_scope:
+                    from googleapiclient.discovery import build
+                    from google.auth.transport.requests import Request
+                    if not creds.valid and creds.refresh_token:
+                        creds.refresh(Request())
+
+                    gmail_service = build("gmail", "v1", credentials=creds, cache_discovery=False)
+                    result = gmail_service.users().messages().send(
+                        userId="me",
+                        body={"raw": raw_encoded}
+                    ).execute()
+
+                    sent = True
+                    send_method = "gmail_api"
+                    response_payload = result
+                    print(f"[GMAIL API] Successfully sent role notification to {recipient_email}. Message ID: {result.get('id')}")
+                else:
+                    error_msg = "Google sign-in does not currently have the gmail.send scope. Use the provided 1-click Gmail web compose link, or sign out and sign back in to grant Gmail permission."
+                    print(f"[GMAIL API INFO] Admin {admin_email} lacks gmail.send scope. Falling back to web compose.")
+        except Exception as exc:
+            error_msg = str(exc)
+            print(f"[GMAIL API WARN] Direct Gmail API send could not complete: {exc}")
 
     # 3. Create a fallback 1-click web Gmail compose link
     compose_params = urllib.parse.urlencode({
@@ -227,13 +248,13 @@ def send_role_notification_via_gmail(
     # 4. Log to persistent notifications log
     log_entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "recipient": recipient_email,
+        "recipient": mask_email_pii(recipient_email),
         "role": role_key,
         "role_label": role_label,
         "permissions_count": len(permissions),
         "sent": sent,
         "method": send_method,
-        "admin_email": admin_email,
+        "admin_email": mask_email_pii(admin_email) if admin_email else None,
         "error": error_msg,
         "tag": SYSTEM_TAG
     }

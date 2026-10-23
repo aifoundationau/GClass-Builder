@@ -97,6 +97,21 @@ class CourseEditorTests(unittest.TestCase):
             self.edit("question", {"title": "Pick", "questionType": "MULTIPLE_CHOICE_QUESTION", "choices": ["A"]},
                       action="create")
 
+    def test_new_posts_always_send_an_explicit_state(self):
+        # Without a state Classroom silently makes a hidden draft; the editor must say which it is.
+        for kind, extra in (("material", {}), ("assignment", {"maxPoints": 10}),
+                            ("question", {"maxPoints": 1, "questionType": "SHORT_ANSWER_QUESTION"})):
+            default = self.edit(kind, {"title": f"Default {kind}", **extra}, action="create")["item"]
+            self.assertEqual(default["state"], "DRAFT", kind)
+            published = self.edit(kind, {"title": f"Live {kind}", "state": "PUBLISHED", **extra},
+                                  action="create")["item"]
+            self.assertEqual(published["state"], "PUBLISHED", kind)
+            drafted = self.edit(kind, {"title": f"Draft {kind}", "state": "DRAFT", **extra},
+                                action="create")["item"]
+            self.assertEqual(drafted["state"], "DRAFT", kind)
+        with self.assertRaisesRegex(EditError, "PUBLISHED or DRAFT"):
+            self.edit("material", {"title": "Odd", "state": "DELETED"}, action="create")
+
     def test_announcements(self):
         post = self.edit("announcement", {"text": "Welcome!"}, action="create")["item"]
         self.assertEqual(self.edit("announcement", {"text": "Welcome, everyone!"}, item_id=post["id"])["item"]["text"],

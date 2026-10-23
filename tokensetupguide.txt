@@ -1,0 +1,490 @@
+================================================================================
+TOKEN SETUP GUIDE: GCOURSE BUILDER (google-course-builder)
+How the shared AI Foundation token system was added to this app, and what is left
+Written 24 October 2026 from the TOKEN SETUP GUIDE of 23 October 2026:
+  E:\Antigravity Projects\ai-foundation\tokensetupguide.txt  (the main guide)
+================================================================================
+
+THIS APP'S SETTINGS
+  App tag ............ gcoursebuilder  (the app's #gcoursebuilder tag without the #;
+                       token tags allow only lower case letters, numbers, - and _)
+  App name ........... GCourse Builder
+                       (both built into api/token-api.js, so Vercel needs no
+                       setting for them; APP_TAG / APP_NAME override them)
+  Firebase project ... ai-foundation-firebase (shared by every app)
+  Live site .......... https://g-class-builder.vercel.app
+  GitHub ............. https://github.com/aifoundationau/GClass-Builder
+  Where people buy ... the Tokens tab, the last item in the sidebar
+
+THE INTERFACE
+  The only visible change is one sidebar item, "Tokens", styled like the others.
+  It opens Buy Tokens (and Token Accounts for the two SuperAdmins) in the app's
+  colours. No other screen changed, and no token file loads until someone opens
+  the tab.
+  Items for sale: the app sells nothing for a price yet, so no token prices were
+  added. When something is for sale, show its price with the small token icon
+  (PART 5).
+
+CONTENTS
+  PART 1  What is done, what is left
+  PART 2  How tokens work in this app
+  PART 3  Files added and changed
+  PART 4  Steps left for you [YOU]
+  PART 5  Selling things for tokens in this app
+  PART 6  Rules
+  PART 7  Troubleshooting
+  PART 8  Links
+
+
+================================================================================
+PART 1: WHAT IS DONE, WHAT IS LEFT
+================================================================================
+
+DONE [AGENT], 24 Oct 2026
+  - Main guide Step 3: the token-kit files were copied unchanged (PART 3). The
+    only edit is the --tokens-* colours at the top of public/tokens.css, set to
+    the app's colours, as the main guide allows.
+  - Main guide Step 8: the kit is wired into this app (PART 2).
+  - Main guide Steps 4 and 9, with no keys set:
+      npm test               pass 28, fail 0
+      npm run check:startup  STARTUP OK
+      npm run build          builds, and copies the token files into dist/
+  - Checked locally without signing in: every token route answers 401 "Sign-in
+    required" through the dev server; in a browser the Tokens tab loads its
+    scripts and shows the sign-in card; the normal start page loads no token
+    files.
+
+LEFT [YOU] (PART 4 has the details)
+  A. Local .env: add the Firebase service account (two lines).
+  B. Vercel: the Firebase service account (two settings). Never a test Stripe
+     key on Production.
+  C. Firebase: check the authorized sign-in domains.
+  D. Firestore rules: deploy them from the AI Foundation folder only.
+  E. Test a purchase locally with Stripe TEST mode.
+  F. Deploy, and check the live token API answers.
+  G. Go live with the live Stripe key.
+  H. Optional: TOKEN_API_ORIGINS.
+  I. Optional: check no other app uses the tag gcoursebuilder.
+
+
+================================================================================
+PART 2: HOW TOKENS WORK IN THIS APP
+================================================================================
+
+THE SHARED SYSTEM (unchanged; the main guide's PART 2 has the full detail)
+  - One balance per person, users/{uid}.token_balance, shared by every app in
+    ai-foundation-firebase. The same Google account is the same uid in every app,
+    so tokens bought in any app add to one total and can be spent in any app.
+  - Every change is a token_ledger entry, saved in the same atomic commit as the
+    balance, with a key that stops it happening twice.
+  - The price per token is set once, in the AI Foundation admin panel (Services &
+    Pricing -> Tokens). USD $1 when blank. Australians pay the AUD price if set.
+  - Tokens are bought 10 at a time with Stripe Checkout. The server works out the
+    price; the browser only says how many tokens.
+  - Only the two SuperAdmins can add tokens for free (Token Accounts).
+
+THIS APP'S SHAPE
+  This app is a React (Vite) front end, a Python API (run locally or in Docker)
+  and a few Vercel functions in api/. The token kit is a Node/Express API, so:
+  - On Vercel: api/token-api.js is one function running the kit's routes.
+    vercel.json sends these addresses to it:
+      /api/tokens and /api/tokens/*   balance, checkout, confirm, spend,
+                                      accounts, grant
+      /api/profile/sync               creates the shared profile on sign-in
+      /api/exchange-rates/usd-aud     SuperAdmin only, optional
+      /api/firebase/config            for public/tokens.html
+  - Locally: npm run dev (dev-runner.mjs) starts three things:
+      Python API ........ http://127.0.0.1:8000
+      token API ......... http://127.0.0.1:8001  (server.js)
+      the app (Vite) .... http://localhost:5173
+    Vite sends the token addresses above to 8001 and every other /api address to
+    Python (vite.config.js).
+  - Docker: the image runs only the Python API, so it has no token API (PART 7).
+
+ONE SIGN-IN
+  The app keeps its own Firebase Google sign-in (src/firebase.js). The kit's
+  public/firebase-client.js is not used inside the app. Instead
+  src/services/tokenAuthBridge.js does its three jobs:
+    1. adds the user's Firebase ID token to token API requests (only those; the
+       app's other /api routes keep using the Classroom sign-in cookie)
+    2. calls POST /api/profile/sync after each sign-in
+    3. sets window.appAuthState and fires 'appAuthChanged', which
+       public/tokens-ui.js listens for
+  The Tokens tab's own "Sign in with Google" button uses the same sign-in.
+
+THE TOKENS TAB
+  src/components/TokensPanel.jsx holds the kit's Buy Tokens and Token Accounts
+  sections from public/tokens.html, with every id unchanged. The first time the
+  tab opens it loads tokens.css, token-pricing.js and then tokens-ui.js, and it
+  stays on the page (hidden) after that, because tokens-ui.js connects to those
+  elements only once. Token Accounts appears only when the server says the user
+  is one of the two SuperAdmins.
+  Stripe sends buyers back to /?tokens=success&session_id=... (or
+  ?tokens=cancelled). The app opens the Tokens tab for those addresses, and
+  tokens-ui.js confirms the payment.
+
+PROFILES
+  POST /api/profile/sync creates users/{uid} with 0 tokens on a person's first
+  sign-in to any app. If the profile exists, it keeps the balance and role and
+  adds 'gcoursebuilder' to the profile's apps list, so the profile records every
+  app the person uses. The app's own sign-in only updates the person's name,
+  photo and last sign-in on an existing profile: roles are this app's own (Role
+  Permissions), and the Superadmin is the owner's Google account.
+
+THE STANDALONE PAGE
+  public/tokens.html (the kit's page, with the kit's own sign-in) also works at
+  /tokens.html. Nothing links to it. The kit's tests use it, and it can serve as
+  a direct "buy tokens" link.
+
+COMMONJS MARKERS
+  The app's package.json says "type": "module", but the kit is CommonJS. So
+  lib/, public/, tests/ and scripts/ each have a small package.json with
+  "type": "commonjs", and the kit files run unchanged. Vercel's bundle for
+  api/token-api.js includes lib/package.json and public/package.json (checked
+  with Vercel's tracer, @vercel/nft 1.11.0). public/package.json is also copied
+  into the built site, which is harmless.
+
+
+================================================================================
+PART 3: FILES ADDED AND CHANGED
+================================================================================
+
+FROM THE TOKEN KIT, COPIED UNCHANGED
+  lib/firestore-rest.js, lib/auth.js, lib/token-balances.js, lib/token-routes.js,
+  lib/exchange-rates.js, public/token-pricing.js, public/firebase-client.js,
+  public/tokens-ui.js, public/tokens.html, public/tokens.css (colours changed
+  only), scripts/check-startup.js, tests/token-pricing.test.js,
+  tests/token-balances.test.js, tests/token-routes.test.js
+
+  To update them later, copy the new versions from
+  E:\Antigravity Projects\ai-foundation\token-kit\ and keep this app's colours
+  in public/tokens.css.
+
+ADDED FOR THIS APP
+  api/token-api.js ................. the token API on Vercel (Express app), with
+                                     the app's tag and name built in
+  server.js ........................ runs api/token-api.js locally on 8001 and
+                                     serves public/; used by npm run dev, npm test
+                                     and npm run check:startup
+  src/services/tokenAuthBridge.js .. the app's sign-in doing firebase-client.js's
+                                     jobs (PART 2)
+  src/components/TokensPanel.jsx ... the Tokens tab
+  lib/, public/, tests/, scripts/package.json   the CommonJS markers
+  tokensetupguide.txt .............. this file
+
+CHANGED
+  package.json, package-lock.json .. express 5.3.0, stripe 23.0.1, dotenv 18.0.9
+                                     (within the kit's ranges); scripts test and
+                                     check:startup
+  vercel.json ...................... rewrites for the token addresses
+  .vercelignore .................... leaves out server.js and tests/
+  vite.config.js ................... token addresses go to 8001 in development
+  dev-runner.mjs ................... starts the token API with Python and Vite
+  .env.example ..................... the token variable names (appended)
+  public/tokens.css ................ --tokens-* colours set to the app's
+  src/App.jsx ...................... the Tokens tab and sidebar item
+  src/main.jsx ..................... loads tokenAuthBridge.js
+  src/index.css .................... spacing for the Tokens tab
+
+NOT COPIED
+  The kit's server.js, package.json and .env.example. This app already has its
+  own files with those names, so they were merged by hand, as the main guide says
+  for an existing app.
+  Note: .gitignore's ".env*" line keeps .env.example out of git, so the variable
+  names are on this computer only. Add "!.env.example" to .gitignore if they
+  should be on GitHub.
+
+
+================================================================================
+PART 4: STEPS LEFT FOR YOU [YOU]
+================================================================================
+
+STEP A  Local environment variables (main guide Step 5a)
+  Add to this folder's .env (never commit .env):
+      FIREBASE_CLIENT_EMAIL=...
+      FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+  Copy the two FIREBASE_ values from AI Foundation's .env (same project). Or use
+  client_email and private_key from this folder's service_account.json, keeping
+  the \n line breaks, on one line, in quotes.
+  Already in .env: STRIPE_SECRET_KEY (use the sk_test_ key while testing:
+  https://dashboard.stripe.com/test/apikeys) and FIREBASE_PROJECT_ID, which must
+  be ai-foundation-firebase.
+  Not needed here: FIREBASE_API_KEY, FIREBASE_APP_ID and the other public Firebase
+  values. /api/firebase/config uses the app's VITE_FIREBASE_* values instead.
+
+STEP B  Vercel environment variables (main guide Step 5b)
+  Vercel -> the g-class-builder project -> Settings -> Environment Variables.
+  Add, for Production and Preview:
+      FIREBASE_CLIENT_EMAIL .. the service account's email (as in Step A)
+      FIREBASE_PRIVATE_KEY ... the whole key (as in Step A); tick Sensitive
+  Nothing else: the tag and name are built into api/token-api.js, and the
+  project defaults to ai-foundation-firebase. APP_TAG, APP_NAME or
+  FIREBASE_PROJECT_ID already in Vercel override the built-in values: delete
+  them, or keep them exactly right.
+  Type the values without quotes: Vercel keeps quotes as part of the value.
+  STRIPE_SECRET_KEY: never a test key (sk_test_) on Production. Anyone can pay
+  with Stripe's public test card, and the tokens they get are real in every app.
+    - Production: the live key (sk_live_), only when you are ready for real
+      payments (Step G). Until then leave it out: the Tokens tab then says card
+      payments are not set up yet. If it is already there, check it or delete it.
+    - Preview: the test key, only if preview deployments are protected
+      (Settings -> Deployment Protection -> Vercel Authentication). Otherwise
+      leave it out.
+  The VITE_FIREBASE_* values can stay as they are.
+  New values reach the site only with a new deployment. The push in Step F
+  brings them in; anything added after that push needs a redeploy.
+  https://vercel.com/docs/environment-variables
+
+STEP C  Authorized sign-in domains (main guide Step 6)
+  https://console.firebase.google.com/project/ai-foundation-firebase/authentication/settings
+  Check that g-class-builder.vercel.app is listed (the app's own Google sign-in
+  needs it too), and add any custom domain. Never add plain vercel.app.
+  Locally, open http://localhost:5173 (localhost is already listed).
+
+STEP D  Firestore rules (main guide Step 7): from the AI Foundation folder only
+  E:\Antigravity Projects\ai-foundation\firestore.rules already has
+  'token_checkouts' in isProtectedCollection and a "match /token_checkouts/{docId}"
+  block (checked 24 Oct 2026). If they are not live yet:
+      cd "E:\Antigravity Projects\ai-foundation"
+      firebase deploy --only firestore:rules --project ai-foundation-firebase
+  WARNING: never run "firebase deploy" from THIS folder: deploy only from the AI
+  Foundation folder. The shared rules there include this app's role rules
+  (merged 24 Oct 2026). This folder's firestore.rules is a copy of them, kept
+  for the app's checks: npm run check:rbac reports any difference.
+
+STEP E  Test locally with Stripe TEST mode (main guide Step 10)
+  1. npm run dev, then open http://localhost:5173 and sign in with Google.
+  2. Open Tokens and buy 10 tokens. Stripe test card: 4242 4242 4242 4242, any
+     future date, any CVC, any postcode (https://docs.stripe.com/testing).
+  3. Back in the app: "Payment received: 10 tokens added to your balance".
+  4. In Firestore
+     (https://console.firebase.google.com/project/ai-foundation-firebase/firestore/databases/-default-/data):
+       users/<your uid>  token_balance went up by 10
+       token_ledger      a purchase_cs_test_... entry, change 10, tag gcoursebuilder
+  5. As a SuperAdmin: Token Accounts lists every account in every app; choose one
+     and add 10.
+  6. Spend test, in the browser console on the app while signed in (the bridge
+     adds the ID token):
+       fetch('/api/tokens/spend', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ tokens: 10, app: 'gcoursebuilder', reference: 'test-1' }) })
+         .then(r => r.json()).then(console.log)
+     Run it twice: the second answer is "already-spent" and the balance does not
+     drop again.
+  Prices show in USD locally (only Vercel tells the server the visitor's
+  country).
+
+STEP F  Deploy (main guide Step 11)
+  Ask the agent to commit; you approve the push. Vercel builds from GitHub.
+  Then check, in a browser:
+    https://g-class-builder.vercel.app/api/tokens
+        must answer {"error":"Sign-in required."}. A 404 or "Cannot GET" means
+        the rewrites in vercel.json are not working.
+    https://g-class-builder.vercel.app/api/firebase/config
+        must answer the public Firebase settings (projectId ai-foundation-firebase).
+  Then sign in on the live site and open Tokens: your balance should show. Pay
+  with the test card only locally or on a protected Preview deployment (Step B),
+  never on the live site.
+
+STEP G  Go live with real payments (main guide Step 12)
+  In Vercel, set Production's STRIPE_SECRET_KEY to the live key (sk_live_...,
+  https://dashboard.stripe.com/apikeys), redeploy, and buy 10 tokens once with a
+  real card. A refund does not take the tokens back.
+  Change the token price only in the AI Foundation admin panel.
+
+STEP H  Optional: other sites using this app's token API (main guide Step 13)
+  Only if a page on another site calls this app's /api/tokens or
+  /api/tokens/spend from the browser: list those sites in TOKEN_API_ORIGINS
+  (https://, comma separated, no trailing slash).
+
+STEP I  Optional: check the tag is free
+  The agent's read-only scan of Firestore for tags in use was blocked by a
+  permission check, so the tag was chosen from the code. Tags found in the owner's
+  projects: aifoundation, lms, rto-ai, pt, itsasimplejob / its-a-simple-job,
+  pro-lms, healthlms, lawyerselect; none is gcoursebuilder. Before the first test
+  purchase, token_ledger and token_checkouts should have no gcoursebuilder
+  records. If another app uses that tag, choose a new one and change it in
+  api/token-api.js.
+
+
+================================================================================
+PART 5: SELLING THINGS FOR TOKENS IN THIS APP
+================================================================================
+
+Nothing is for sale yet, so no prices were invented. When something is:
+
+SHOW THE PRICE WITH THE TOKEN ICON
+  Use lucide-react's Coins icon (the same icon as the Tokens tab), small, next to
+  the amount:
+      import { Coins } from 'lucide-react';
+      <span><Coins size={14} /> 50 tokens</span>
+
+CHARGE ON THE SERVER
+  Tokens are money: the server decides the price, never the browser. Add the paid
+  route to api/token-api.js (it runs on Vercel, and locally through server.js):
+
+      import auth from '../lib/auth.js';
+      import tokenBalances from '../lib/token-balances.js';
+
+      // Made on first use, so a bad APP_TAG can't crash the function at startup.
+      // APP_TAG and APP_NAME are the constants at the top of api/token-api.js
+      let tokenStore = null;
+      function tokens() {
+        if (!tokenStore) tokenStore = tokenBalances.createTokenStore({ appTag: APP_TAG, appName: APP_NAME });
+        return tokenStore;
+      }
+
+      const TEMPLATE_PRICE_TOKENS = 50;
+
+      app.post('/api/shop/templates/:id/buy', auth.attachUser, auth.requireAuth, async (req, res) => {
+        try {
+          const result = await tokens().spendTokens({
+            uid: req.user.uid,
+            tokens: TEMPLATE_PRICE_TOKENS,
+            app: APP_TAG,
+            // The purchase's own ID: sending it again never takes tokens twice
+            reference: `template-${req.params.id}-${req.user.uid}`,
+            description: `Template ${req.params.id}`
+          });
+          if (result.status === 'insufficient') {
+            return res.status(409).json({ error: 'Not enough tokens.', balance: result.balance });
+          }
+          // 'spent' or 'already-spent': give the user what they paid for here
+          res.json({ ok: true, balance: result.balance });
+        } catch (e) {
+          console.error('[Template purchase]', e);
+          res.status(500).json({ error: 'Tokens could not be spent just now, and none were taken.' });
+        }
+      });
+
+  Then send the new address to the token API:
+    - vercel.json: a rewrite from /api/shop/:path* to /api/token-api, above the
+      last rewrite.
+    - vite.config.js: '/api/shop' to http://127.0.0.1:8001, above '/api'.
+    - src/services/tokenAuthBridge.js: add shop to TOKEN_API, so the browser's
+      request carries the ID token.
+  References: up to 100 characters from A-Z a-z 0-9 _ . : -
+
+WHERE THE USER CHOOSES THE AMOUNT (a tip, for example)
+  The browser can call POST /api/tokens/spend with { tokens, app: 'gcoursebuilder',
+  reference, description }. Answers: 200 { status: 'spent' | 'already-spent',
+  spent, balance } or 409 { error: 'Not enough tokens.', balance }.
+
+PYTHON FEATURES
+  The Python API (course creation, the AI agent) uses the Classroom sign-in, not
+  the Firebase ID token, and the kit has no Python version. To charge for a Python
+  feature, take the tokens in a Node route as above first, or ask an agent to plan
+  a server-to-server design. Never change token_balance from Python with a plain
+  write.
+
+
+================================================================================
+PART 6: RULES
+================================================================================
+
+The main guide's PART 6 applies in full. In short:
+  1. Nothing at the top level of api/token-api.js, server.js or lib/ may throw
+     when an environment variable is missing. Run npm run check:startup before
+     every push.
+  2. Tokens are money: change token_balance only through lib/token-balances.js.
+  3. The server works out every price.
+  4. Firestore rules live only in the AI Foundation folder (PART 4, Step D).
+  5. Do not change who is SuperAdmin (lib/auth.js, matching firestore.rules).
+     aifoundation.com.au is not the owner's domain: never use it.
+  6. Keep public/token-pricing.js identical to the kit's.
+  7. Authorized domains: exact hostnames only, never plain vercel.app.
+  8. New environment variables: the name (never the value) goes in .env.example;
+     tell the owner to add it in Vercel.
+  9. Before saying a change is done: npm test and npm run check:startup, with the
+     real output.
+ 10. Do not commit or push unless the owner asks.
+
+For this app as well:
+  - Keep Vercel settings to a minimum (the owner's rule): build settings that
+    aren't secret into the code, as the tag and name are in api/token-api.js;
+    only secrets go in Vercel.
+  - Never run "firebase deploy" from this folder.
+  - Keep the four CommonJS package.json markers (lib/, public/, tests/,
+    scripts/).
+  - When a token file in public/ changes, raise its ?v= number in
+    src/components/TokensPanel.jsx (and in public/tokens.html).
+  - Keep the kit's element ids in TokensPanel.jsx unchanged: tokens-ui.js finds
+    the elements by id.
+  - Run npm run build as well before pushing: Vercel builds the app with it.
+
+
+================================================================================
+PART 7: TROUBLESHOOTING
+================================================================================
+
+The main guide's PART 7 covers the token messages. For this app:
+
+Tokens tab says "Tokens are not set up on this server yet (APP_TAG is missing)"
+  APP_TAG is set but empty or not a valid tag, in .env or in Vercel. Delete it
+  (the tag is built in), then restart npm run dev or redeploy.
+
+Tokens tab: "Could not load your tokens: Sign-in required"
+  The Firebase sign-in is missing. Sign out and in again.
+
+Tokens tab shows "..." and its sign-in button does nothing
+  The token scripts did not load. The browser console shows
+  "[Tokens] Could not load ...". This happens in the Docker image (below).
+
+Locally, token requests fail with HTTP 500, and the terminal shows "http proxy
+error ... ECONNREFUSED 127.0.0.1:8001"
+  The token API on port 8001 isn't running. npm run dev starts it; make sure
+  nothing else is using port 8001.
+
+"npm run dev": Vite stops with "EPERM ... node_modules\.vite\deps"
+  Another program has Vite's cache folder open. This happened on 24 Oct 2026,
+  after npm install changed the lockfile. Close other dev servers, then delete
+  the node_modules\.vite folder and start again.
+
+Docker
+  The Docker image runs only the Python API, so the Tokens tab can't load there.
+  To support Docker, the image needs Node, with server.js running beside the
+  Python API and the token addresses sent to it. Ask an agent to plan it.
+
+Live site: /api/tokens answers 404 or "Cannot GET /api/token-api"
+  The rewrites in vercel.json aren't working, or api/token-api.js wasn't
+  deployed. Check the deployment's Functions list in Vercel.
+
+Live site: 500 FUNCTION_INVOCATION_FAILED on token addresses
+  Run npm run check:startup. If it says "require is not defined in ES module
+  scope", a CommonJS marker package.json is missing.
+
+Paid, but no tokens
+  Open the Tokens tab again while signed in: unpaid checkouts are checked again
+  and credited.
+
+
+================================================================================
+PART 8: LINKS
+================================================================================
+
+This app
+  Live site ............ https://g-class-builder.vercel.app
+  Token API check ...... https://g-class-builder.vercel.app/api/tokens
+  GitHub ............... https://github.com/aifoundationau/GClass-Builder
+
+The main guide and kit
+  Main guide ........... E:\Antigravity Projects\ai-foundation\tokensetupguide.txt
+  Token kit ............ E:\Antigravity Projects\ai-foundation\token-kit\
+  Shared rules ......... E:\Antigravity Projects\ai-foundation\firestore.rules
+  Token data contract .. E:\Antigravity Projects\ai-foundation\data-contracts.md
+                         (Domain 11)
+
+Firebase (project ai-foundation-firebase)
+  Authorized domains ... https://console.firebase.google.com/project/ai-foundation-firebase/authentication/settings
+  Service accounts ..... https://console.firebase.google.com/project/ai-foundation-firebase/settings/serviceaccounts/adminsdk
+  Firestore data ....... https://console.firebase.google.com/project/ai-foundation-firebase/firestore/databases/-default-/data
+  Firestore rules ...... https://console.firebase.google.com/project/ai-foundation-firebase/firestore/databases/-default-/rules
+
+Stripe
+  Test API keys ........ https://dashboard.stripe.com/test/apikeys
+  Live API keys ........ https://dashboard.stripe.com/apikeys
+  Payments ............. https://dashboard.stripe.com/payments
+  Test cards ........... https://docs.stripe.com/testing
+
+Vercel
+  Environment variables  https://vercel.com/docs/environment-variables
+================================================================================

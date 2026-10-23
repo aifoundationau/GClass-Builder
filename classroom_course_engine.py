@@ -1240,8 +1240,13 @@ def _normalize_curriculum_sheet(df: pd.DataFrame) -> List[Dict[str, Any]]:
         elif any(w in c_clean for w in ["due date", "deadline"]):
             col_map["due_date"] = col
 
+    seen_seqs = set()
     for idx, row in df.iterrows():
         seq = (_cell_text(row[col_map["sequence"]]) if "sequence" in col_map else "") or f"Week {idx + 1}"
+        seq_norm = re.sub(r"\s+", " ", seq).strip().lower()
+        if seq_norm in seen_seqs:
+            raise ValueError(f"Curriculum row {idx + 2}: duplicate Week '{seq}'. Each week in the Curriculum sheet must have a unique Week name.")
+        seen_seqs.add(seq_norm)
         title = str(row[col_map["title"]]).strip() if "title" in col_map and not pd.isna(row[col_map["title"]]) else f"Module {idx + 1}"
         overview = str(row[col_map["overview"]]).strip() if "overview" in col_map and not pd.isna(row[col_map["overview"]]) else ""
         
@@ -1511,7 +1516,15 @@ def _attach_quiz_questions(df: pd.DataFrame, curriculum: List[Dict[str, Any]], s
     columns = {col: _quiz_column_key(col) for col in df.columns}
     if "week" not in columns.values() or "question" not in columns.values():
         raise ValueError(f"The {sheet} sheet needs a Week column and a Question column.")
-    weeks = {re.sub(r"\s+", " ", str(m["sequence"])).strip().lower(): m for m in curriculum}
+    weeks = {}
+    for m in curriculum:
+        seq_key = re.sub(r"\s+", " ", str(m["sequence"])).strip().lower()
+        if seq_key in weeks:
+            raise ValueError(
+                f"Curriculum sheet has duplicate week '{m['sequence']}'. "
+                f"Each week must have a unique Week name so its quiz questions can be attached correctly."
+            )
+        weeks[seq_key] = m
     for idx, row in df.iterrows():
         cells = {key: row[col] for col, key in columns.items() if key}
         if not any(_cell_text(v) for v in cells.values()):

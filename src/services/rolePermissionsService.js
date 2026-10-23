@@ -1,8 +1,8 @@
 // Firestore storage for role-based access (see src/rbac/permissions.js):
-//   /roles/{roleKey}            { roleName, permissions, updatedAt, updatedBy }
-//   /role_assignments/{email}   { email, role, assignedAt, assignedBy }
-// Only an account whose sign-in token carries the "superadmin" role claim may write either
-// (firestore.rules), and every write stores the whole document.
+//   /gcoursebuilder_roles/{roleKey}            { roleName, permissions, updatedAt, updatedBy }
+//   /gcoursebuilder_role_assignments/{email}   { email, role, assignedAt, assignedBy }
+// Only the Superadmin (the owner's Google account) may write either (firestore.rules), and every
+// write stores the whole document.
 
 import {
   collection, deleteDoc, doc, onSnapshot, serverTimestamp, setDoc, writeBatch,
@@ -10,7 +10,7 @@ import {
 import { db, isFirebaseConfigured } from "../firebase";
 import {
   ASSIGNABLE_ROLE_KEYS, ROLES_COLLECTION, ROLE_ASSIGNMENTS_COLLECTION, ROLE_BY_KEY, effectivePermissions,
-  normalizeEmail, normalizeRoleKey,
+  isOwnerAccount, normalizeEmail, normalizeRoleKey,
 } from "../rbac/permissions";
 
 const notConfigured = () => new Error("Firebase is not configured (VITE_FIREBASE_API_KEY).");
@@ -109,12 +109,30 @@ export async function removeRoleAssignment(email) {
   await deleteDoc(doc(db, ROLE_ASSIGNMENTS_COLLECTION, email));
 }
 
-// The "role" custom claim on a Firebase user's ID token (set by scripts/rbac-admin.mjs), or null,
-// and the verified email address that role assignments are looked up by
+// Whether a Firebase user's sign-in is one of the owner's accounts (the Superadmin), and the
+// verified email address that role assignments are looked up by
 export async function readTokenIdentity(user, forceRefresh = false) {
   const { claims } = await user.getIdTokenResult(forceRefresh);
   return {
-    claimRole: normalizeRoleKey(claims.role),
+    isOwner: isOwnerAccount({ uid: user.uid, email: claims.email, emailVerified: claims.email_verified === true }),
     email: claims.email_verified ? normalizeEmail(claims.email) : null,
   };
+}
+
+// Everyone in the shared /users profiles (all the owner's apps) with an email address, live, as
+// [{ email, name, apps }], for picking who gets a role. firestore.rules let only the Superadmin and
+// admins read the whole collection.
+export function subscribeToPeople(onChange, onError) {
+  return listen(collection(db, "users"), (snap) => {
+    const byEmail = new Map();
+    snap.forEach((d) => {
+      const data = d.data();
+      const email = normalizeEmail(data.email);
+      if (!email || byEmail.has(email)) return;
+      const apps = [...new Set([...(Array.isArray(data.apps) ? data.apps : []), data.tag]
+        .map(a => String(a || '').replace(/^#/, '').trim()).filter(Boolean))];
+      byEmail.set(email, { email, name: String(data.displayName || data.name || '').trim(), apps });
+    });
+    onChange([...byEmail.values()].sort((a, b) => a.email.localeCompare(b.email)));
+  }, onError);
 }

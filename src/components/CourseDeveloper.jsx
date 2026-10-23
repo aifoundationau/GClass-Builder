@@ -19,14 +19,24 @@ async function postJson(url, body) {
     body: JSON.stringify(body || {}),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error('AI Course Developer requires the Python backend. Run "npm run dev" locally or connect your Cloud Run container.');
+    }
+    throw new Error(data.error || `Request failed (${res.status})`);
+  }
   return data;
 }
 
 async function getJson(url) {
   const res = await fetch(url);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error('Backend service not available (404). This feature requires the fullstack Python engine.');
+    }
+    throw new Error(data.error || `Request failed (${res.status})`);
+  }
   return data;
 }
 

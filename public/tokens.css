@@ -1,0 +1,308 @@
+/* Buy Tokens and Token Accounts (tokens.html / tokens-ui.js). Change the variables to match the app's colours */
+:root {
+  --tokens-accent: #1a73e8;
+  --tokens-accent-soft: #e8f0fe;
+  --tokens-text: #1e293b;
+  --tokens-muted: #475569;
+  --tokens-border: rgba(200, 204, 214, 0.6);
+  --tokens-input-border: #cbd5e1;
+  --tokens-surface: rgba(255, 255, 255, 0.85);
+  --tokens-bg: #f8f9fc;
+}
+
+.tokens-page {
+  margin: 0;
+  background: var(--tokens-bg);
+  color: var(--tokens-text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.tokens-main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px;
+  display: grid;
+  gap: 20px;
+}
+.tokens-card {
+  background: var(--tokens-surface);
+  border: 1px solid var(--tokens-border);
+  border-radius: 12px;
+  padding: 18px;
+}
+.tokens-card h1,
+.tokens-card h2 {
+  margin: 0 0 6px;
+  font-size: 1.25rem;
+}
+.tokens-intro {
+  margin: 0 0 16px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: var(--tokens-muted);
+}
+#buyTokensSection {
+  max-width: 460px;
+}
+
+.tokens-balance {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--tokens-border);
+  font-size: 0.88rem;
+  color: var(--tokens-muted);
+}
+.tokens-balance strong {
+  font-size: 1.05rem;
+  color: var(--tokens-text);
+}
+
+/* The - and + buttons either side of the amount box */
+.tokens-picker {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.tokens-step {
+  flex: 0 0 44px;
+  height: 44px;
+  background: #ffffff;
+  border: 1px solid var(--tokens-input-border);
+  border-radius: 10px;
+  color: var(--tokens-accent);
+  font-size: 1.3rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.tokens-step:hover:not(:disabled) {
+  background: var(--tokens-accent-soft);
+  border-color: var(--tokens-accent);
+}
+.tokens-step:focus-visible,
+.tokens-btn:focus-visible,
+.token-account-row:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.25);
+}
+.tokens-step:disabled {
+  color: #94a3b8;
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.tokens-amount {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  background: #ffffff;
+  border: 1px solid var(--tokens-input-border);
+  border-radius: 10px;
+}
+.tokens-amount:focus-within {
+  border-color: var(--tokens-accent);
+  box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.12);
+}
+.tokens-amount input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--tokens-text);
+  text-align: center;
+}
+.tokens-amount span {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--tokens-muted);
+}
+.tokens-hint {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--tokens-muted);
+}
+.tokens-total {
+  margin-top: 14px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: #334155;
+}
+.tokens-total strong {
+  font-size: 1.2rem;
+  color: var(--tokens-text);
+}
+.tokens-rate {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--tokens-muted);
+}
+
+.tokens-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 22px;
+  background: var(--tokens-accent);
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.tokens-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.tokens-btn-wide {
+  width: 100%;
+  margin-top: 14px;
+}
+.tokens-secure {
+  margin-top: 10px;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  text-align: center;
+}
+
+.tokens-status {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+.tokens-status.is-ok {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+.tokens-status.is-error {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+.tokens-status.is-info {
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+}
+
+/* Token Accounts (SuperAdmin): the account list and the add-tokens box side by side when there's room */
+.token-accounts-layout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+.token-accounts-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid var(--tokens-input-border);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 1rem;
+  color: var(--tokens-text);
+}
+.token-accounts-search:focus {
+  outline: none;
+  border-color: var(--tokens-accent);
+  box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.12);
+}
+.token-accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 420px;
+  margin-top: 10px;
+  overflow-y: auto;
+}
+.token-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid var(--tokens-border);
+  border-radius: 10px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.token-account-row:hover {
+  background: var(--tokens-accent-soft);
+  border-color: #93c5fd;
+}
+.token-account-row.is-selected {
+  background: var(--tokens-accent-soft);
+  border-color: var(--tokens-accent);
+}
+.token-account-who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.token-account-who strong,
+.token-account-who small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.token-account-who strong {
+  font-size: 0.9rem;
+  color: var(--tokens-text);
+}
+.token-account-who small {
+  font-size: 0.78rem;
+  color: var(--tokens-muted);
+}
+/* Which app the account belongs to, e.g. LMS */
+.token-account-app {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--tokens-border);
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.token-account-balance {
+  flex: none;
+  font-size: 0.9rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.token-account-balance small {
+  font-weight: 500;
+  color: var(--tokens-muted);
+}
+.token-accounts-empty {
+  margin: 8px 2px;
+  font-size: 0.88rem;
+  color: var(--tokens-muted);
+}
+.token-grant-card {
+  background: #ffffff;
+}
+[hidden] {
+  display: none !important;
+}

@@ -35,5 +35,21 @@ class DistFileTests(unittest.TestCase):
         self.assertIsNone(api_server._dist_file("/assets"))
 
 
+class CORSSecurityTests(unittest.TestCase):
+    def setUp(self):
+        self.handler = api_server.CourseBuilderAPIHandler.__new__(api_server.CourseBuilderAPIHandler)
+
+    def test_allowed_origins_are_accepted(self):
+        for origin in ("http://localhost:5173", "http://127.0.0.1:5173",
+                       "http://localhost:8000", "http://127.0.0.1:8000",
+                       "https://g-class-builder.vercel.app"):
+            self.assertTrue(self.handler._is_origin_allowed(origin), f"Expected {origin} to be allowed")
+
+    def test_untrusted_and_arbitrary_origins_are_rejected(self):
+        for origin in ("https://malicious.example.com", "https://attacker.vercel.app",
+                       "http://192.168.1.100:5173", "http://randomsite.org", None, ""):
+            self.assertFalse(self.handler._is_origin_allowed(origin), f"Expected {origin} to be rejected")
+
+
 if __name__ == "__main__":
     unittest.main()

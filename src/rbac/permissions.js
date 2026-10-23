@@ -1,23 +1,36 @@
 // Role-based access control (RBAC) catalog: the 24 permissions, the 11 system roles and the
 // baseline permissions each role is seeded with. Firestore keeps the live data, which the
-// Superadmin edits in Role Permissions:
+// Superadmin edits in Role Permissions. The collections carry the app's tag, because roles and
+// permissions belong to this app alone (other apps sharing the Firebase project have their own):
 //
-//   /roles/{roleKey}            { roleName, permissions, updatedAt, updatedBy }
-//   /role_assignments/{email}   { email, role, assignedAt, assignedBy }   (email in lower case)
+//   /gcoursebuilder_roles/{roleKey}            { roleName, permissions, updatedAt, updatedBy }
+//   /gcoursebuilder_role_assignments/{email}   { email, role, assignedAt, assignedBy }   (email in lower case)
 //
-// A user's role is their "role" custom claim when they have one (superadmins, set by
-// scripts/rbac-admin.mjs), else the role assigned to their verified Google email, else supporter.
-// firestore.rules repeats the role and permission keys (npm run check:rbac compares them), so add
-// a key in both places.
+// The Superadmin is the owner, as in every app: one of the owner's Google accounts, recognised from
+// the sign-in. Everyone else has the role the Superadmin assigned to their verified Google email,
+// else supporter. firestore.rules repeats the role and permission keys and the owner's accounts
+// (npm run check:rbac compares them), so change them in both places.
 //
 // Plain JavaScript with no Firebase imports, so scripts/ can use it from Node.
 
-export const ROLES_COLLECTION = 'roles';
-export const ROLE_ASSIGNMENTS_COLLECTION = 'role_assignments';
+export const ROLES_COLLECTION = 'gcoursebuilder_roles';
+export const ROLE_ASSIGNMENTS_COLLECTION = 'gcoursebuilder_role_assignments';
 
 export const SUPERADMIN_ROLE = 'superadmin';
-// Every new Google sign-in, and every account without a role claim or assignment
+// Every new Google sign-in, and every account without an assignment, is a supporter until the
+// Superadmin gives it a role
 export const DEFAULT_ROLE = 'supporter';
+
+// The owner's Google accounts: the Superadmin in every app sharing the Firebase project, matched
+// by uid, or by email when Google has verified it. The same lists as lib/auth.js and isSuperAdmin()
+// in firestore.rules. Never change them unless the owner asks.
+export const SUPERADMIN_UIDS = ['ZK79FRQoVlYhsgvMibhi81dRUWj2', 'L5euSJAfNKdDOX6mT0qmrCGjUA53'];
+export const SUPERADMIN_EMAILS = ['davidrobertson.info@gmail.com', 'support@aifoundation.net.au'];
+
+export function isOwnerAccount({ uid, email, emailVerified } = {}) {
+  return SUPERADMIN_UIDS.includes(uid)
+    || (emailVerified === true && SUPERADMIN_EMAILS.includes(String(email || '').trim().toLowerCase()));
+}
 
 export const PERMISSION_GROUPS = [
   { key: 'academic', label: 'Academic & LMS' },
@@ -85,7 +98,7 @@ export const PERMISSIONS = [
 export const PERMISSION_KEYS = PERMISSIONS.map(p => p.key);
 export const PERMISSION_BY_KEY = Object.fromEntries(PERMISSIONS.map(p => [p.key, p]));
 
-// Highest level first. The key is the Firestore document ID and the value of the "role" claim.
+// Highest level first. The key is the Firestore document ID in gcoursebuilder_roles.
 export const ROLES = [
   { key: 'superadmin', label: 'Superadmin', level: 100,
     description: 'Unrestricted access across every system, including role permissions. Always holds every permission.' },
@@ -113,8 +126,7 @@ export const ROLES = [
 
 export const ROLE_KEYS = ROLES.map(r => r.key);
 export const ROLE_BY_KEY = Object.fromEntries(ROLES.map(r => [r.key, r]));
-// Roles that can be given to an email address. Superadmin needs the custom claim instead, which
-// only the Admin SDK can set (scripts/rbac-admin.mjs set-role <email> superadmin).
+// Roles that can be given to an email address. Superadmin never is: it is the owner.
 export const ASSIGNABLE_ROLE_KEYS = ROLE_KEYS.filter(k => k !== SUPERADMIN_ROLE);
 
 // What /roles is seeded with when a document is missing. The Superadmin changes it from there.
@@ -151,7 +163,7 @@ export const BASELINE_ROLE_PERMISSIONS = {
   supporter: ['courses.view'],
 };
 
-// Older profile categories (firebaseAuthService USER_CATEGORIES, the registration form) and their role
+// Older role names (profile categories, the registration form) and their role
 const ROLE_ALIASES = {
   'super admin': 'superadmin',
   super_admin: 'superadmin',
@@ -164,7 +176,7 @@ const ROLE_ALIASES = {
   instructor: 'teacher',
 };
 
-// The role key for a claim or profile value ("CEO", "admin staff", "teacher"), or null if unknown
+// The role key for a stored or typed value ("CEO", "admin staff", "teacher"), or null if unknown
 export function normalizeRoleKey(value) {
   const text = String(value ?? '').trim().toLowerCase();
   if (!text) return null;

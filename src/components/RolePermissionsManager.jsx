@@ -1,17 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle, Check, DollarSign, FileText, GraduationCap, Info, LayoutGrid, List, Lock, Mail, MessageSquare,
-  RefreshCw, RotateCcw, Save, Search, Send, Settings, ShieldCheck, Undo2, UserPlus, Users, X,
+  RotateCcw, Save, Search, Send, Settings, ShieldCheck, Undo2, UserPlus, Users, X,
 } from 'lucide-react';
 import { auth } from '../firebase';
 import { useRbac } from '../rbac/PermissionContext';
 import {
   BASELINE_ROLE_PERMISSIONS, DEFAULT_ROLE, PERMISSIONS, PERMISSION_GROUPS, ROLES, ROLES_COLLECTION,
-  ROLE_ASSIGNMENTS_COLLECTION, ROLE_BY_KEY, SUPERADMIN_ROLE, effectivePermissions, normalizeEmail, normalizeRoleKey,
+  ROLE_ASSIGNMENTS_COLLECTION, ROLE_BY_KEY, SUPERADMIN_ROLE, effectivePermissions, isOwnerAccount, normalizeEmail,
+  normalizeRoleKey,
 } from '../rbac/permissions';
 import {
-  assignRoleToEmail, removeRoleAssignment, saveAllRolePermissions, saveRolePermissions, subscribeToRoleAssignments,
-  subscribeToRoles,
+  assignRoleToEmail, removeRoleAssignment, saveAllRolePermissions, saveRolePermissions, subscribeToPeople,
+  subscribeToRoleAssignments, subscribeToRoles,
 } from '../services/rolePermissionsService';
 
 // Role Permissions: the Superadmin ticks what each role may do, and Save Role / Save All write it
@@ -32,12 +33,12 @@ const sameSet = (stored, shown) => {
 const formatTime = (ts) => (ts && typeof ts.toDate === 'function' ? ts.toDate().toLocaleString() : '');
 
 const saveError = (err) => (err && err.code === 'permission-denied'
-  ? 'Firestore refused the write: only an account whose sign-in carries the superadmin role claim can save, and the RBAC rules (firestore.rules) must be deployed.'
+  ? 'Firestore refused the write: only the Superadmin (the owner\'s Google account) can save, and the shared Firestore rules with this app\'s roles must be deployed.'
   : (err && err.message) || String(err));
 
 export default function RolePermissionsManager({ showToast }) {
   const rbac = useRbac();
-  // firestore.rules accept /roles writes only from the superadmin claim, whatever the profile says
+  // firestore.rules accept role writes only from the Superadmin: the owner's Google account
   const canEdit = rbac.role === SUPERADMIN_ROLE;
   const me = auth.currentUser;
 
@@ -54,6 +55,10 @@ export default function RolePermissionsManager({ showToast }) {
   const [newEmail, setNewEmail] = useState('');
   const [assigning, setAssigning] = useState(false);
   const [assignError, setAssignError] = useState('');
+  const [people, setPeople] = useState(null); // everyone in the shared profiles, null until read
+  const [peopleError, setPeopleError] = useState('');
+  const [peopleQuery, setPeopleQuery] = useState('');
+  const [picked, setPicked] = useState([]); // emails ticked to receive the selected role
 
   useEffect(() => subscribeToRoles(
     (roles) => { setStored(roles); setLoadError(''); },
@@ -64,6 +69,18 @@ export default function RolePermissionsManager({ showToast }) {
     (list) => { setAssignments(list); setAssignmentsError(''); },
     (err) => { setAssignments([]); setAssignmentsError(err.message || String(err)); },
   ), []);
+
+  // Only the Superadmin may read everyone's profile
+  useEffect(() => {
+    if (!canEdit) return undefined;
+    return subscribeToPeople(
+      (list) => { setPeople(list); setPeopleError(''); },
+      (err) => { setPeople([]); setPeopleError(err.message || String(err)); },
+    );
+  }, [canEdit]);
+
+  // A selection is for one role
+  useEffect(() => { setPicked([]); }, [activeRole]);
 
   // What each role shows: unsaved ticks, else Firestore, else the baseline
   const current = {};
@@ -166,9 +183,9 @@ export default function RolePermissionsManager({ showToast }) {
         });
         const notifData = await notifRes.json();
         if (notifData.sent) {
-          emailStatus = ' & sent Gmail API notification!';
+          emailStatus = ' & sent notification email!';
         } else if (notifData.composeUrl) {
-          emailStatus = ' & logged notification (Gmail ready).';
+          emailStatus = ' (notification draft prepared; click Send Email to dispatch).';
         }
       } catch (notifErr) {
         console.warn('[Gmail Notification] Error dispatching email:', notifErr);
@@ -186,8 +203,19 @@ export default function RolePermissionsManager({ showToast }) {
 
   const sendNotification = async (targetEmail) => {
     const label = ROLE_BY_KEY[activeRole].label;
+    const permissions = current[activeRole] || [];
+    showToast(`Preparing email notification for ${targetEmail}...`);
+
+    const openClientFallback = () => {
+      const subject = `Role Granted: You have been assigned the ${label} role [#gcoursebuilder]`;
+      const permLines = permissions.map(p => `  * ${p}`).join('\n');
+      const plainBody = `Hello,\n\nYour Google account (${targetEmail}) has been granted the ${label} role on Google Course Builder.\n\nGranted Permissions:\n${permLines || '  * Baseline supporter access.'}\n\nHow to activate:\nSign in to Google Course Builder using ${targetEmail}. Your role and permissions will activate automatically.\n\nTag: #gcoursebuilder\nAssigned by: ${me?.email || 'System Administrator'}\n`;
+      const composeUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(targetEmail)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(plainBody)}`;
+      window.open(composeUrl, '_blank');
+      showToast(`Opened Gmail compose tab for ${targetEmail}`);
+    };
+
     try {
-      showToast(`Preparing Gmail notification for ${targetEmail}...`);
       const res = await fetch('/api/notifications/send-role-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -195,21 +223,28 @@ export default function RolePermissionsManager({ showToast }) {
           recipientEmail: targetEmail,
           roleKey: activeRole,
           roleLabel: label,
-          permissions: current[activeRole] || [],
+          permissions,
           adminEmail: me?.email || null,
         }),
       });
+
+      if (!res.ok) {
+        openClientFallback();
+        return;
+      }
+
       const data = await res.json();
       if (data.sent) {
-        showToast(`Sent Gmail API notification to ${targetEmail}!`);
+        showToast(`Sent Gmail notification to ${targetEmail}!`);
       } else if (data.composeUrl) {
         window.open(data.composeUrl, '_blank');
         showToast(`Opened Gmail compose tab for ${targetEmail}`);
       } else {
-        showToast(`Notification logged for ${targetEmail}`);
+        openClientFallback();
       }
     } catch (err) {
-      showToast(`Could not send Gmail notification: ${err.message}`);
+      console.warn('[Gmail Notification] Fallback to direct compose:', err);
+      openClientFallback();
     }
   };
 
@@ -219,6 +254,29 @@ export default function RolePermissionsManager({ showToast }) {
       showToast(`Removed ${email} from ${ROLE_BY_KEY[activeRole].label}: they are a supporter again.`);
     } catch (err) {
       showToast(`Could not remove ${email}. ${saveError(err)}`);
+    }
+  };
+
+  // Each email's role in this app (supporter when it has none)
+  const roleByEmail = Object.fromEntries((assignments || []).map(a => [a.email, normalizeRoleKey(a.role)]));
+
+  const togglePicked = (email) => setPicked(prev => (prev.includes(email) ? prev.filter(e => e !== email) : [...prev, email]));
+
+  // Gives the ticked people the selected role; anyone with another role moves to this one
+  const givePicked = async () => {
+    const label = ROLE_BY_KEY[activeRole].label;
+    const emails = picked.filter(email => roleByEmail[email] !== activeRole);
+    if (emails.length === 0) return;
+    setAssigning(true);
+    setAssignError('');
+    try {
+      for (const email of emails) await assignRoleToEmail(email, activeRole, me && me.uid);
+      setPicked([]);
+      showToast(`${emails.length === 1 ? `${emails[0]} now has` : `${emails.length} people now have`} the ${label} role. Use Send Email to tell them.`);
+    } catch (err) {
+      setAssignError(saveError(err));
+    } finally {
+      setAssigning(false);
     }
   };
 
@@ -239,6 +297,11 @@ export default function RolePermissionsManager({ showToast }) {
   const shown = PERMISSIONS.filter(p => (groupFilter === 'all' || p.group === groupFilter)
     && (!needle || `${p.label} ${p.key} ${p.description}`.toLowerCase().includes(needle)));
   const members = (assignments || []).filter(a => normalizeRoleKey(a.role) === activeRole);
+  // Everyone matching the search, at most 200 rows at a time
+  const peopleNeedle = peopleQuery.trim().toLowerCase();
+  const matchingPeople = (people || []).filter(p => !peopleNeedle
+    || `${p.name} ${p.email} ${p.apps.join(' ')}`.toLowerCase().includes(peopleNeedle));
+  const shownPeople = matchingPeople.slice(0, 200);
 
   const membersPanel = (
     <section className="rbac-panel">
@@ -250,16 +313,16 @@ export default function RolePermissionsManager({ showToast }) {
       {isSuper ? (
         <>
           <p className="rbac-role-desc">
-            Superadmin is given with a custom claim on the person's sign-in, not by email, because the
-            security rules accept permission changes only from that claim. Run, with a service-account key:
+            The Superadmin is the owner: the owner's Google account is recognised when it signs in, in this
+            app and in every other app that shares the Firebase project. It is never given by email.
           </p>
-          <code className="rbac-command rbac-command-spaced">node scripts/rbac-admin.mjs set-role name@example.com superadmin --apply</code>
         </>
       ) : (
         <>
           <p className="rbac-role-desc">
-            Add a Google email address to give that account this role. It applies the next time they sign in,
-            or straight away if they are signed in. Someone who has another role moves to this one.
+            Tick people below, or type the email of someone who hasn't signed in yet, to give them this role.
+            It applies the next time they sign in, or straight away if they are signed in. Someone who has
+            another role moves to this one; everyone else is a supporter.
           </p>
           <div style={{
             display: 'flex',
@@ -274,8 +337,65 @@ export default function RolePermissionsManager({ showToast }) {
             marginBottom: '12px'
           }}>
             <Send size={13} />
-            <span><strong>Gmail API Active:</strong> When an account is added, an email detailing their granted role & permissions is automatically sent.</span>
+            <span><strong>Role Notifications:</strong> Assigning a role prepares a notification email detailing granted permissions. Click <strong>Send Email</strong> next to any member to review and dispatch via Gmail.</span>
           </div>
+          {canEdit && (
+            <div className="rbac-people-picker">
+              <label className="rbac-search rbac-people-search">
+                <Search size={14} />
+                <input
+                  type="search"
+                  placeholder="Search everyone by name, email or app"
+                  value={peopleQuery}
+                  onChange={(e) => setPeopleQuery(e.target.value)}
+                  aria-label="Search everyone"
+                />
+              </label>
+              {peopleError && <p className="rbac-inline-error" role="alert">Could not read everyone's profiles: {peopleError}</p>}
+              {people === null && !peopleError && <p className="rbac-empty">Reading everyone's profiles...</p>}
+              {people && !peopleError && (shownPeople.length === 0 ? (
+                <p className="rbac-empty">{people.length ? 'No one matches your search.' : 'No profiles yet.'}</p>
+              ) : (
+                <ul className="rbac-people" aria-label={`People to give the ${role.label} role`}>
+                  {shownPeople.map((p) => {
+                    const isOwner = isOwnerAccount({ email: p.email, emailVerified: true });
+                    const has = isOwner ? SUPERADMIN_ROLE : (roleByEmail[p.email] || DEFAULT_ROLE);
+                    const fixed = isOwner || has === activeRole;
+                    return (
+                      <li key={p.email}>
+                        <label className={`rbac-person ${picked.includes(p.email) ? 'picked' : ''} ${fixed ? 'fixed' : ''}`}>
+                          <input
+                            type="checkbox"
+                            checked={picked.includes(p.email)}
+                            onChange={() => togglePicked(p.email)}
+                            disabled={fixed || assigning}
+                          />
+                          <span className="rbac-person-who">
+                            <strong>{p.name || p.email}</strong>
+                            {p.name && <small>{p.email}</small>}
+                          </span>
+                          {p.apps.length > 0 && <span className="rbac-person-apps">{p.apps.join(', ')}</span>}
+                          <span className="rbac-person-role">{ROLE_BY_KEY[has].label}</span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ))}
+              {matchingPeople.length > shownPeople.length && (
+                <p className="rbac-empty">Showing {shownPeople.length} of {matchingPeople.length}: search to narrow the list.</p>
+              )}
+              <button
+                type="button"
+                className="btn-primary rbac-small-btn rbac-btn-purple"
+                onClick={givePicked}
+                disabled={assigning || picked.length === 0}
+              >
+                <UserPlus size={14} />
+                <span>{assigning ? 'Giving...' : `Give ${role.label} to ${picked.length ? `${picked.length} ` : ''}selected`}</span>
+              </button>
+            </div>
+          )}
           <form className="rbac-assign-form" onSubmit={addMember}>
             <label className="rbac-search rbac-assign-input">
               <Mail size={14} />
@@ -609,21 +729,11 @@ export default function RolePermissionsManager({ showToast }) {
         <div className="rbac-alert rbac-alert-warn" role="status">
           <AlertTriangle size={18} />
           <div>
-            <strong>Read-only: your sign-in does not carry the superadmin role.</strong>
+            <strong>Read-only: only the Superadmin changes roles.</strong>
             <p>
-              Firestore accepts permission changes only from an account whose Firebase token has the custom
-              claim <code>role: "superadmin"</code> (yours: <code>{rbac.role || 'none'}</code>). Grant it with a
-              service-account key, then refresh your role:
+              The Superadmin is the owner's Google account, recognised when it signs in. Your role here
+              is <code>{ROLE_BY_KEY[rbac.role]?.label || 'none'}</code>.
             </p>
-            <code className="rbac-command">node scripts/rbac-admin.mjs set-role {(me && me.email) || 'you@example.com'} superadmin --apply</code>
-            <button
-              type="button"
-              className="btn-secondary rbac-small-btn"
-              onClick={() => rbac.refreshRole().catch(err => showToast(`Could not refresh your role: ${err.message}`))}
-            >
-              <RefreshCw size={14} />
-              <span>Refresh my role</span>
-            </button>
           </div>
         </div>
       )}

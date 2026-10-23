@@ -1,0 +1,13 @@
+[
+  {
+    "timestamp": "2026-10-20T00:00:00.000000+00:00",
+    "recipient": "user@example.com",
+    "role": "teacher",
+    "role_label": "Teacher",
+    "permissions_count": 6,
+    "sent": true,
+    "method": "gmail_api",
+    "admin_email": "admin@example.com",
+    "tag": "#gcoursebuilder"
+  }
+]

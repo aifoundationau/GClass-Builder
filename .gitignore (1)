@@ -1,0 +1,73 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Sensitive & Secret Files (Google OAuth & Sessions)
+credentials*.json
+!credentials.example.json
+# Security review with unfixed findings: keep out of the public repository
+finalreport.txt
+# Firebase Admin service-account keys (scripts/rbac-admin.mjs)
+*-firebase-adminsdk-*.json
+service-account*.json
+service_account*.json
+serviceAccount*.json
+token*.json
+user_session*.json
+* (1).*
+*.env
+*.env.local
+*.env.*.local
+.env
+.env.*
+
+# Build & Distribution Outputs
+dist/
+build/
+*.egg-info/
+.installed.cfg
+*.egg
+GCourseBuilder.spec
+
+# Vite and Test Caches
+.vite/
+.vite-temp/
+.npm-cache/
+*.tgz
+
+# Logs & Temporary files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+.temp/
+.tmp/
+
+# System / OS
+.DS_Store
+Thumbs.db
+
+# Per-teacher OAuth credentials and sessions
+teacher_tokens/
+
+# Vercel
+.vercel/
+
+.vercel
+.env*

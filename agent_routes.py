@@ -71,6 +71,9 @@ def _error_status(exc: Exception) -> int:
         return 400
     if isinstance(exc, ClassroomCallError):
         return 403
+    from ai_model_router import GeminiAuthError
+    if isinstance(exc, GeminiAuthError):
+        return 503
     return 500
 
 
@@ -301,16 +304,19 @@ def handle_post(handler, path: str) -> bool:
             # One change from the course editor: update a field or add an item. Never deletes.
             handler._send_json(200, course_editor.apply_edit(_teacher_service(handler), handler._read_json_body()))
         elif path == "/api/agent/plan":
+            _require_teacher(handler)
             body = handler._read_json_body()
             files = [(f["name"], base64.b64decode(f["data"])) for f in body.get("files", [])]
             source = course_agent.combine_sources(body.get("text", ""), files)
             plan = course_agent.draft_plan(source, body.get("instructions", ""), body.get("standards", []))
             handler._send_json(200, {"plan": plan})
         elif path == "/api/agent/extract":
+            _require_teacher(handler)
             body = handler._read_json_body()
             files = [(f["name"], base64.b64decode(f["data"])) for f in body.get("files", [])]
             handler._send_json(200, {"files": course_agent.extract_attachments(files)})
         elif path == "/api/agent/chat":
+            _require_teacher(handler)
             body = handler._read_json_body()
             mode = body.get("mode", "create")
             summary = None
@@ -324,6 +330,7 @@ def handle_post(handler, path: str) -> bool:
                                             body.get("standards", []), step_context=step)
             handler._send_json(200, {"reply": reply})
         elif path == "/api/agent/intake":
+            _require_teacher(handler)
             body = handler._read_json_body()
             files = [(f["name"], base64.b64decode(f["data"])) for f in body.get("files", [])]
             source = course_agent.combine_sources(body.get("text", ""), files)
@@ -333,6 +340,7 @@ def handle_post(handler, path: str) -> bool:
                 snapshot = course_agent.read_course_snapshot(service, str(body.get("courseId", "")))
             handler._send_json(200, course_agent.intake_sources(source, body.get("mode", "create"), snapshot))
         elif path == "/api/agent/revise":
+            _require_teacher(handler)
             body = handler._read_json_body()
             plan = course_agent.revise_plan(body.get("plan") or {}, body.get("request", ""), body.get("standards", []))
             handler._send_json(200, {"plan": plan})

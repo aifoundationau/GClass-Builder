@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    host: true,
+    host: '127.0.0.1',
     fs: {
       // The dev server serves every file in the project folder, and host: true opens it to the
       // network. Refuse secrets, tokens, sessions, member records and the backend (Vite's own
@@ -18,6 +18,11 @@ export default defineConfig({
       ],
     },
     proxy: {
+      // The token API (server.js, started by dev-runner.mjs on 8001). Listed before /api, which goes to Python
+      '/api/tokens': { target: 'http://127.0.0.1:8001', changeOrigin: true },
+      '/api/profile/sync': { target: 'http://127.0.0.1:8001', changeOrigin: true },
+      '/api/exchange-rates/usd-aud': { target: 'http://127.0.0.1:8001', changeOrigin: true },
+      '/api/firebase/config': { target: 'http://127.0.0.1:8001', changeOrigin: true },
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true

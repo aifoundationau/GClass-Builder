@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "commonjs",
+  "description": "token-kit files here are CommonJS; the app root is \"type\": \"module\" (see tokensetupguide.txt)"
+}

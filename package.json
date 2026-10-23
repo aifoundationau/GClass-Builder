@@ -7,6 +7,8 @@
     "dev": "node dev-runner.mjs",
     "start": "node dev-runner.mjs",
     "build": "vite build --logLevel warn",
+    "test": "node --test tests/token-pricing.test.js tests/token-balances.test.js tests/token-routes.test.js",
+    "check:startup": "node scripts/check-startup.js server.js",
     "check:workbook": "node scripts/check-course-workbook.mjs",
     "check:rbac": "node scripts/check-rbac.mjs",
     "test:rules": "firebase emulators:exec --only firestore --project demo-gcoursebuilder \"node scripts/test-firestore-rules.mjs\"",
@@ -14,10 +16,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
     "firebase": "^11.0.0",
     "lucide-react": "^1.59.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "stripe": "^23.0.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

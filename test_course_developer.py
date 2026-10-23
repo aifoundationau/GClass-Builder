@@ -812,6 +812,35 @@ class RubricRuleTests(unittest.TestCase):
         self.assertFalse(any(c["resource"] == "courses.courseWork.rubrics" for c in svc.calls
                              if c["method"] == "create"))
 
+    def test_apply_allows_rubric_for_draft_assignment(self):
+        # When an assignment is in DRAFT state, _fetch_known_ids must find it and allow rubric creation
+        svc = FakeService(data={
+            "courses.topics": {"topic": [{"topicId": "t1", "name": "Topic 1"}]},
+            "courses.courseWork": {"courseWork": [{"id": "w_draft", "title": "Draft Quiz", "state": "DRAFT"}]},
+        })
+        results = cd.apply_operations(svc, [
+            {"resource": "courses.courseWork.rubrics", "method": "create", "params": {"courseWorkId": "w_draft"},
+             "body": {"criteria": [{"title": "Clarity", "points": 10}]}},
+        ], course_id="c1")
+        self.assertTrue(results[0]["ok"])
+        rubric_calls = [c for c in svc.calls if c["resource"] == "courses.courseWork.rubrics" and c["method"] == "create"]
+        self.assertEqual(len(rubric_calls), 1)
+        self.assertEqual(rubric_calls[0]["params"]["courseWorkId"], "w_draft")
+
+    def test_load_step_data_requests_published_and_draft_states(self):
+        svc = FakeService()
+        cd.load_step_data(svc, "c1", "assignments", nested=False)
+        work_call = [c for c in svc.calls if c["resource"] == "courses.courseWork"][0]
+        self.assertEqual(work_call["params"]["courseWorkStates"], ["PUBLISHED", "DRAFT"])
+
+        cd.load_step_data(svc, "c1", "materials", nested=False)
+        mat_call = [c for c in svc.calls if c["resource"] == "courses.courseWorkMaterials"][0]
+        self.assertEqual(mat_call["params"]["courseWorkMaterialStates"], ["PUBLISHED", "DRAFT"])
+
+        cd.load_step_data(svc, "c1", "announcements", nested=False)
+        ann_call = [c for c in svc.calls if c["resource"] == "courses.announcements"][0]
+        self.assertEqual(ann_call["params"]["announcementStates"], ["PUBLISHED", "DRAFT"])
+
 
 class RubricSnapshotTests(unittest.TestCase):
     def _service(self, work_count):

@@ -146,15 +146,55 @@ def _dist_file(url_path: str):
 
 
 class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
+    ALLOWED_ORIGINS = frozenset({
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "https://g-class-builder.vercel.app",
+    })
+
+    def _is_origin_allowed(self, origin: Optional[str]) -> bool:
+        if not origin:
+            return False
+        if origin in self.ALLOWED_ORIGINS:
+            return True
+        custom = os.environ.get("ALLOWED_ORIGIN")
+        if custom and origin == custom.strip():
+            return True
+        return False
+
     def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        origin = self.headers.get("Origin")
+        if origin and self._is_origin_allowed(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Credentials", "true")
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Cookie")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
 
     def do_OPTIONS(self):
+        origin = self.headers.get("Origin")
+        if origin and not self._is_origin_allowed(origin):
+            self.send_response(403)
+            self.end_headers()
+            return
         self.send_response(200)
         self._send_cors_headers()
         self.end_headers()
+
+    def do_HEAD(self):
+        path = self._resolve_request_path()
+        if path == "/api/status" or path == "/":
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header("Content-Type", "application/json" if path.startswith("/api") else "text/html")
+            self.end_headers()
+        else:
+            self.do_GET()
 
     def _send_json(self, status_code: int, data: dict):
         self.send_response(status_code)
@@ -166,11 +206,19 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_json_body(self) -> dict:
-        content_length = int(self.headers.get("Content-Length", 0))
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+        except (ValueError, TypeError):
+            raise ValueError("Invalid Content-Length header")
+        if content_length > 10 * 1024 * 1024:  # 10MB limit
+            raise ValueError("Request body too large (maximum 10MB allowed)")
         if content_length == 0:
             return {}
-        raw = self.rfile.read(content_length).decode("utf-8")
-        return json.loads(raw)
+        try:
+            raw = self.rfile.read(content_length).decode("utf-8")
+            return json.loads(raw)
+        except json.JSONDecodeError as err:
+            raise ValueError(f"Malformed JSON in request body: {err}")
 
     def _resolve_request_path(self) -> str:
         parsed = urllib.parse.urlparse(self.path)
@@ -227,7 +275,8 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
             except PermissionError as e:
                 self._send_json(401, {"error": str(e)})
             except Exception as e:
-                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+                print(f"[API ERROR] {e}\n{traceback.format_exc()}")
+                self._send_json(500, {"error": str(e)})
 
         elif path == "/api/courses/create/status":
             job_id = urllib.parse.parse_qs(parsed.query).get("job", [""])[0]
@@ -243,6 +292,10 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
             })
 
         elif path == "/api/test":
+            admin_email = agent_routes._current_email(self)
+            if not admin_email:
+                self._send_json(401, {"error": "Authentication required. Please sign in first."})
+                return
             try:
                 is_safe, violations = audit_codebase_safety()
                 self._send_json(200, {
@@ -253,8 +306,12 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json(500, {"error": str(e)})
 
-        # 6. Role Assignment Notification Logs
+        # 6. Role Assignment Notification Logs (restricted to authenticated admin)
         elif path == "/api/notifications/logs":
+            admin_email = agent_routes._current_email(self)
+            if not admin_email:
+                self._send_json(401, {"error": "Authentication required. Please sign in first."})
+                return
             logs = []
             if os.path.exists(gmail_service.GMAIL_NOTIFICATIONS_LOG):
                 try:
@@ -262,7 +319,17 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                         logs = json.load(f)
                 except Exception:
                     logs = []
-            self._send_json(200, {"logs": logs, "tag": "#gcoursebuilder"})
+            # Mask emails for data minimization and PII protection
+            sanitized_logs = []
+            for item in (logs if isinstance(logs, list) else []):
+                if isinstance(item, dict):
+                    entry = dict(item)
+                    if "recipient" in entry:
+                        entry["recipient"] = gmail_service.mask_email_pii(entry["recipient"])
+                    if "admin_email" in entry and entry["admin_email"]:
+                        entry["admin_email"] = gmail_service.mask_email_pii(entry["admin_email"])
+                    sanitized_logs.append(entry)
+            self._send_json(200, {"logs": sanitized_logs, "tag": "#gcoursebuilder"})
 
         else:
             if not path.startswith("/api/"):
@@ -324,7 +391,8 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 job_id = start_create_job(service, agent_routes._current_email(self), tmp_path, forms_service)
                 self._send_json(202, {"jobId": job_id})
             except Exception as e:
-                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+                print(f"[API ERROR] {e}\n{traceback.format_exc()}")
+                self._send_json(500, {"error": str(e)})
 
         # 4. Sync Course
         elif path == "/api/courses/sync":
@@ -356,7 +424,8 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
             except PermissionError as e:
                 self._send_json(401, {"error": str(e)})
             except Exception as e:
-                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+                print(f"[API ERROR] {e}\n{traceback.format_exc()}")
+                self._send_json(500, {"error": str(e)})
 
         # 5. Duplicate Course (Disabled per safety requirements: "no duplicate course")
         elif path == "/api/courses/duplicate":
@@ -367,7 +436,20 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
         # 6. Stripe LMS Customer Registration
         elif path == "/api/stripe/create-customer":
             try:
+                # Authentication required: only signed-in users can register or create Stripe customers
+                current_user = agent_routes._current_email(self)
+                if not current_user:
+                    self._send_json(401, {"error": "Authentication required. Please sign in first."})
+                    return
+
                 body = self._read_json_body()
+                # Security: Enforce 'student' role on public/self-registration to prevent privilege escalation
+                body["role"] = "student"
+                reg_email = body.get("email") or current_user
+                if not reg_email or "@" not in str(reg_email):
+                    self._send_json(400, {"error": "Valid email address is required."})
+                    return
+
                 customer = stripe_lms_service.create_stripe_customer(body)
 
                 # SetupIntent if card collection requested
@@ -401,11 +483,11 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
 
                 user_record = {
                     "uid": f"lms_usr_{customer['id'].replace('cus_', '')}",
-                    "email": body.get("email"),
+                    "email": str(reg_email).strip().lower(),
                     "name": body.get("name"),
                     "business_name": body.get("businessName") or body.get("business_name", ""),
                     "account_type": account_type,
-                    "role": body.get("role", "student"),
+                    "role": "student",  # Security: Enforce student role
                     "date_of_birth": dob,
                     "education_history": edu_record,
                     "phone": body.get("phone", ""),
@@ -432,11 +514,18 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                     "message": "Student registered successfully. Client ID generated and academic profile saved."
                 })
             except Exception as e:
-                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+                print(f"[API ERROR] {e}\n{traceback.format_exc()}")
+                self._send_json(500, {"error": str(e)})
 
         # 7. Model Context Protocol (MCP) Tool Execution Endpoint
         elif path == "/api/mcp/invoke":
             try:
+                # Authentication required: only signed-in callers can execute MCP onboarding tools
+                current_user = agent_routes._current_email(self)
+                if not current_user:
+                    self._send_json(401, {"error": "Authentication required. Please sign in first."})
+                    return
+
                 body = self._read_json_body()
                 tool_name = body.get("tool") or body.get("name")
                 args = body.get("arguments") or body.get("parameters") or body
@@ -449,15 +538,19 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                     "accountType": args.get("account_type") or args.get("accountType", "individual"),
                     "name": args.get("name", ""),
                     "businessName": args.get("business_name") or args.get("businessName", ""),
-                    "email": args.get("email", ""),
+                    "email": args.get("email") or current_user,
                     "phone": args.get("phone", ""),
                     "dateOfBirth": args.get("date_of_birth") or args.get("dateOfBirth", ""),
                     "educationHistory": args.get("education_history") or args.get("educationHistory", {}),
-                    "role": args.get("role", "student"),
+                    "role": "student",  # Security: Enforce student role
                     "taxId": args.get("tax_id") or args.get("taxId", ""),
                     "address": args.get("address", {}),
                     "saveCard": args.get("save_card") or args.get("saveCard", False)
                 }
+
+                if not payload["email"] or "@" not in str(payload["email"]):
+                    self._send_json(400, {"error": "Valid email address is required."})
+                    return
 
                 customer = stripe_lms_service.create_stripe_customer(payload)
 
@@ -474,11 +567,11 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
 
                 user_record = {
                     "uid": f"lms_usr_{customer['id'].replace('cus_', '')}",
-                    "email": payload.get("email"),
+                    "email": str(payload.get("email")).strip().lower(),
                     "name": payload.get("name"),
                     "business_name": payload.get("businessName", ""),
                     "account_type": payload.get("accountType", "individual"),
-                    "role": payload.get("role", "student"),
+                    "role": "student",  # Security: Enforce student role
                     "date_of_birth": str(payload.get("dateOfBirth", "")).strip(),
                     "education_history": edu_record,
                     "phone": payload.get("phone", ""),
@@ -504,31 +597,52 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                     "agent_summary": f"Registration completed for student '{user_record['name']}'. Client ID is '{customer['id']}'. Academic profile successfully stored."
                 })
             except Exception as e:
-                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+                print(f"[API ERROR] {e}\n{traceback.format_exc()}")
+                self._send_json(500, {"error": str(e)})
 
-        # 7. Attach Saved Card to Customer
+        # 8. Attach Saved Card to Customer
         elif path == "/api/stripe/attach-card":
             try:
+                # Authentication required
+                current_user = agent_routes._current_email(self)
+                if not current_user:
+                    self._send_json(401, {"error": "Authentication required. Please sign in first."})
+                    return
+
                 body = self._read_json_body()
                 customer_id = body.get("customer_id")
                 payment_method_id = body.get("payment_method_id")
                 if not customer_id or not payment_method_id:
                     self._send_json(400, {"error": "Missing customer_id or payment_method_id"})
                     return
+
+                # Verify ownership: customer must match caller's record if found
+                user_records = stripe_lms_service.load_all_lms_users()
+                matching_record = next((u for u in user_records if u.get("stripe_customer_id") == customer_id), None)
+                if matching_record and matching_record.get("email") != current_user:
+                    self._send_json(403, {"error": "Forbidden: You cannot attach payment methods to another user's customer ID."})
+                    return
+
                 updated = stripe_lms_service.attach_payment_method(customer_id, payment_method_id)
                 self._send_json(200, {"success": True, "customer": updated})
             except Exception as e:
-                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+                print(f"[API ERROR] {e}\n{traceback.format_exc()}")
+                self._send_json(500, {"error": str(e)})
 
         # 8. Send Role & Permissions Notification Email via Gmail API
         elif path == "/api/notifications/send-role-email":
             try:
+                # Authentication required: only signed-in staff/admin can dispatch notifications
+                admin_email = agent_routes._current_email(self)
+                if not admin_email:
+                    self._send_json(401, {"error": "Authentication required. Please sign in first."})
+                    return
+
                 body = self._read_json_body()
                 recipient_email = body.get("recipientEmail") or body.get("email")
                 role_key = body.get("roleKey") or body.get("role", "supporter")
                 role_label = body.get("roleLabel") or body.get("label") or role_key.capitalize()
                 permissions = body.get("permissions") or []
-                admin_email = body.get("adminEmail") or agent_routes._current_email(self)
 
                 if not recipient_email or "@" not in str(recipient_email):
                     self._send_json(400, {"error": "Valid recipientEmail is required."})
@@ -543,7 +657,8 @@ class CourseBuilderAPIHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(200, result)
             except Exception as e:
-                self._send_json(500, {"error": str(e), "traceback": traceback.format_exc()})
+                print(f"[API ERROR] {e}\n{traceback.format_exc()}")
+                self._send_json(500, {"error": str(e)})
 
         else:
             self._send_json(404, {"error": f"Path not found: {path}"})

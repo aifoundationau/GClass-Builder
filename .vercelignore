@@ -15,3 +15,6 @@ test_course_engine.py
 credentials*.json
 token*.json
 user_session*.json
+# Token API: Vercel runs api/token-api.js. server.js (the local token server) and the token tests stay local
+server.js
+tests/

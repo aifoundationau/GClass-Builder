@@ -1,0 +1,48 @@
+[
+  {
+    "uid": "lms_usr_sample_admin",
+    "email": "admin@example.com",
+    "name": "Sample Admin",
+    "business_name": "Sample Academy",
+    "stripe_customer_id": "cus_sample_0000000000",
+    "tag": "#gcoursebuilder",
+    "tags": [
+      "#gcoursebuilder",
+      "gcoursebuilder",
+      "lms"
+    ],
+    "role": "school_admin",
+    "source": "gcoursebuilder",
+    "updated_at": "2026-01-01T00:00:00.000000+00:00"
+  },
+  {
+    "uid": "lms_usr_sample_student",
+    "email": "student@example.com",
+    "name": "Jane Doe",
+    "business_name": "",
+    "account_type": "individual",
+    "role": "student",
+    "phone": "+61000000000",
+    "address": {
+      "line1": "123 Sample St",
+      "city": "Sydney",
+      "postal_code": "2000",
+      "country": "AU"
+    },
+    "tax_id": "",
+    "stripe_customer_id": "cus_sample_0000000001",
+    "invoice_policy": {
+      "default_status": "draft",
+      "payment_terms_days": 30,
+      "prefix": "LMS"
+    },
+    "tag": "#gcoursebuilder",
+    "tags": [
+      "#gcoursebuilder",
+      "gcoursebuilder",
+      "lms"
+    ],
+    "source": "gcoursebuilder",
+    "updated_at": "2026-01-01T00:00:00.000000+00:00"
+  }
+]

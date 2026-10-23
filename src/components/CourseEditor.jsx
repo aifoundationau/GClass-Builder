@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ExternalLink, Pencil, Plus, RefreshCw } from 'lucide-react';
+import { withBrowserOffset } from '../lib/courseWorkbook';
 
 // A simple editor for one Google Classroom course, after it is created. Each save is one
 // Classroom API call (see course_editor.py): course details, topics, posts and announcements
@@ -12,13 +13,19 @@ async function request(url, body) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error('Course Editor requires the Python backend service. Run "npm run dev" locally or connect your Cloud Run container.');
+    }
+    throw new Error(data.error || `Request failed (${res.status})`);
+  }
   return data;
 }
 
 const pad = (n) => String(n).padStart(2, '0');
 
-// Classroom keeps due dates in UTC; the editor shows and takes them in this computer's time.
+// Classroom keeps due dates in UTC; the editor shows and takes them in the browser's time zone
+// and sends them with that offset, so the server's time zone does not matter.
 const dueToLocal = (d, t) => {
   if (!d || !d.year) return { date: '', time: '' };
   const at = new Date(Date.UTC(d.year, d.month - 1, d.day, (t && t.hours) || 0, (t && t.minutes) || 0));
@@ -48,12 +55,24 @@ const sectionStyle = { border: '1px solid var(--border-color)', borderRadius: 10
 const rowStyle = { border: '1px solid var(--border-color)', borderRadius: 8, padding: '10px 12px' };
 const muted = { color: 'var(--text-muted)', fontSize: '0.8rem' };
 const small = { fontSize: '0.78rem', padding: '4px 10px' };
+const draftBadge = {
+  display: 'inline-block', marginLeft: 6, padding: '1px 8px', borderRadius: 999, fontSize: '0.7rem', fontWeight: 600,
+  background: '#fef3c7', color: '#92400e', border: '1px solid #f59e0b', verticalAlign: 'middle',
+};
+const DRAFT_TEXT = 'Saved as a draft: only teachers can see it. Use "Publish to students" when it is ready.';
+const PUBLISHED_TEXT = 'Published: students can see it now.';
 
 function Message({ message }) {
   if (!message) return null;
   return (
     <div role={message.error ? 'alert' : 'status'} style={{ fontSize: '0.8rem', color: message.error ? '#c5221f' : '#188038' }}>
       {message.text}
+      {message.link && (
+        <>
+          {' '}
+          <a href={message.link} target="_blank" rel="noreferrer" style={{ color: 'inherit', fontWeight: 600 }}>Open in Classroom</a>
+        </>
+      )}
     </div>
   );
 }
@@ -83,7 +102,7 @@ function PostRow({ item, kind, topics, hasRubric, save }) {
   if (draft.topicId !== initial.topicId) changes.topicId = draft.topicId;
   if (kind !== 'material' && String(draft.maxPoints) !== String(initial.maxPoints)) changes.maxPoints = draft.maxPoints === '' ? 0 : Number(draft.maxPoints);
   if (kind !== 'material' && (draft.date !== initial.date || draft.time !== initial.time)) {
-    changes.due = draft.date ? (draft.time ? `${draft.date}T${draft.time}` : draft.date) : '';
+    changes.due = draft.date ? withBrowserOffset(draft.time ? `${draft.date}T${draft.time}` : draft.date) : '';
   }
 
   const run = async (fields, done) => {
@@ -100,7 +119,6 @@ function PostRow({ item, kind, topics, hasRubric, save }) {
   };
 
   const meta = [
-    item.state === 'DRAFT' ? 'Draft' : '',
     kind !== 'material' && item.maxPoints ? `${item.maxPoints} pts` : '',
     kind !== 'material' && dueLabel(item) ? `Due ${dueLabel(item)}` : '',
     hasRubric ? 'Rubric' : '',
@@ -111,7 +129,10 @@ function PostRow({ item, kind, topics, hasRubric, save }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
         <div style={{ minWidth: 0 }}>
           <div style={muted}>{kind === 'material' ? 'Material' : kindLabel(item)}{meta ? ` · ${meta}` : ''}</div>
-          <div style={{ fontWeight: 600, wordBreak: 'break-word' }}>{item.title}</div>
+          <div style={{ fontWeight: 600, wordBreak: 'break-word' }}>
+            {item.title}
+            {item.state === 'DRAFT' && <span style={draftBadge} title="Students cannot see this yet">Draft</span>}
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
           {item.alternateLink && (
@@ -187,7 +208,7 @@ function PostRow({ item, kind, topics, hasRubric, save }) {
             </button>
             {item.state === 'DRAFT' && (
               <button type="button" className="btn-secondary" style={small} disabled={locked || busy}
-                onClick={() => run({ state: 'PUBLISHED' }, 'Published to students.')}>
+                onClick={() => run({ state: 'PUBLISHED' }, PUBLISHED_TEXT)}>
                 Publish to students
               </button>
             )}
@@ -204,17 +225,18 @@ function PostRow({ item, kind, topics, hasRubric, save }) {
 // ---------------------------------------------------------------------------
 
 function AddPost({ topics, create }) {
-  const blank = { kind: 'material', title: '', description: '', topicId: '', maxPoints: 100, date: '', time: '', links: '', questionType: 'SHORT_ANSWER_QUESTION', choices: '' };
+  const blank = { kind: 'material', title: '', description: '', topicId: '', maxPoints: 100, date: '', time: '', links: '', questionType: 'SHORT_ANSWER_QUESTION', choices: '', state: 'DRAFT' };
   const [form, setForm] = useState(blank);
   const [message, setMessage] = useState(null);
   const [busy, setBusy] = useState(false);
   const set = (fields) => setForm({ ...form, ...fields });
 
   const submit = async () => {
-    const fields = { title: form.title, description: form.description, topicId: form.topicId };
+    // Always send the state: Classroom would otherwise make a hidden draft without saying so.
+    const fields = { title: form.title, description: form.description, topicId: form.topicId, state: form.state };
     if (form.kind !== 'material') {
       fields.maxPoints = Number(form.maxPoints || 0);
-      if (form.date) fields.due = form.time ? `${form.date}T${form.time}` : form.date;
+      if (form.date) fields.due = withBrowserOffset(form.time ? `${form.date}T${form.time}` : form.date);
     }
     if (form.kind !== 'question') fields.links = form.links.split(/[\r\n]+/).map((s) => s.trim()).filter(Boolean);
     if (form.kind === 'question') {
@@ -225,8 +247,12 @@ function AddPost({ topics, create }) {
     setMessage(null);
     try {
       const result = await create(form.kind, fields);
-      setMessage({ text: ['Added to Classroom.', ...(result.notes || [])].join(' ') });
-      setForm({ ...blank, kind: form.kind, topicId: form.topicId });
+      const state = result.item?.state || form.state;
+      setMessage({
+        text: [state === 'PUBLISHED' ? PUBLISHED_TEXT : DRAFT_TEXT, ...(result.notes || [])].join(' '),
+        link: result.item?.alternateLink,
+      });
+      setForm({ ...blank, kind: form.kind, topicId: form.topicId, state: form.state });
     } catch (e) {
       setMessage({ error: true, text: e.message });
     } finally {
@@ -274,10 +300,21 @@ function AddPost({ topics, create }) {
           )}
         </div>
       )}
+      <fieldset style={{ border: 0, padding: 0, margin: 0, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        <legend style={{ ...muted, float: 'left', marginRight: 6 }}>Who can see it:</legend>
+        <label style={{ ...muted, display: 'inline-flex', gap: 6, alignItems: 'center', minHeight: 32, cursor: 'pointer' }}>
+          <input type="radio" name="add-post-state" value="DRAFT" checked={form.state === 'DRAFT'} onChange={() => set({ state: 'DRAFT' })} />
+          Save as draft (teachers only)
+        </label>
+        <label style={{ ...muted, display: 'inline-flex', gap: 6, alignItems: 'center', minHeight: 32, cursor: 'pointer' }}>
+          <input type="radio" name="add-post-state" value="PUBLISHED" checked={form.state === 'PUBLISHED'} onChange={() => set({ state: 'PUBLISHED' })} />
+          Publish now (students see it)
+        </label>
+      </fieldset>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <button type="button" className="btn-primary" style={small} disabled={busy || !form.title.trim()} onClick={submit}>
           <Plus size={12} />
-          <span>Add</span>
+          <span>{form.state === 'PUBLISHED' ? 'Add and publish' : 'Add as draft'}</span>
         </button>
         <Message message={message} />
       </div>

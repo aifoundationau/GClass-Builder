@@ -128,6 +128,19 @@ class TestRoutes(unittest.TestCase):
         handler._read_json_body.assert_not_called()
         handler._send_json.assert_not_called()
 
+    def test_ai_agent_post_routes_require_authentication(self):
+        for route in ("/api/agent/plan", "/api/agent/extract", "/api/agent/chat",
+                      "/api/agent/intake", "/api/agent/revise"):
+            handler = mock.Mock()
+            handler.headers = {}
+            handler.path = route
+            handler._read_json_body.return_value = {"mode": "create"}
+            agent_routes.handle_post(handler, route)
+            handler._send_json.assert_called_once()
+            status, payload = handler._send_json.call_args.args
+            self.assertEqual(status, 401, f"{route} should require authentication (returned {status})")
+            self.assertIn("Sign in", payload.get("error", ""))
+
 
 class TestTeacherSessions(unittest.TestCase):
 

@@ -44,6 +44,13 @@ PUBLISHABLE_RESOURCES = frozenset({
     "courses.announcements",
 })
 
+# State query parameter names to include both PUBLISHED and DRAFT items when reading from Classroom
+RESOURCE_STATE_PARAMS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
+    "courses.courseWork": ("courseWorkStates", ("PUBLISHED", "DRAFT")),
+    "courses.courseWorkMaterials": ("courseWorkMaterialStates", ("PUBLISHED", "DRAFT")),
+    "courses.announcements": ("announcementStates", ("PUBLISHED", "DRAFT")),
+}
+
 # Stream items that must sit in a topic of the same course (topicId). A create with no
 # topicId is refused. Announcements never carry topicId: Classroom does not accept it there.
 TOPIC_RESOURCES = frozenset({"courses.courseWork", "courses.courseWorkMaterials"})
@@ -360,8 +367,11 @@ def load_step_data(service: Any, course_id: str, step_key: str,
         if resource in NESTED_RESOURCES or resource in classroom_api.ADDON_RESOURCES:
             continue
         if _can_list(resource):
-            data[resource] = classroom_api.list_all(service, resource, LIST_KEYS[resource],
-                                                    {"courseId": cid})
+            params: Dict[str, Any] = {"courseId": cid}
+            if resource in RESOURCE_STATE_PARAMS:
+                param_name, states = RESOURCE_STATE_PARAMS[resource]
+                params[param_name] = list(states)
+            data[resource] = classroom_api.list_all(service, resource, LIST_KEYS[resource], params)
 
     if not nested:
         return data
@@ -461,7 +471,12 @@ def _fetch_known_ids(service: Any, course_id: str) -> Dict[str, FrozenSet[str]]:
     """
     cid = str(course_id)
     topics = classroom_api.list_all(service, "courses.topics", LIST_KEYS["courses.topics"], {"courseId": cid})
-    works = classroom_api.list_all(service, "courses.courseWork", LIST_KEYS["courses.courseWork"], {"courseId": cid})
+    works = classroom_api.list_all(
+        service,
+        "courses.courseWork",
+        LIST_KEYS["courses.courseWork"],
+        {"courseId": cid, "courseWorkStates": ["PUBLISHED", "DRAFT"]},
+    )
     return {
         "topics": frozenset(str(t["topicId"]) for t in topics if t.get("topicId")),
         "works": frozenset(str(w["id"]) for w in works if w.get("id")),

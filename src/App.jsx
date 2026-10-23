@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import {
   Users,
@@ -33,19 +33,22 @@ import {
   Compass,
   ArrowRight,
   KeyRound,
+  Coins,
   X
 } from 'lucide-react';
 import RegistrationModal from './components/RegistrationModal';
 import ClassroomEnvironment from './components/ClassroomEnvironment';
 import DeployProgress from './components/DeployProgress';
+import Toast, { toastType } from './components/Toast';
 import QuizQuestionsEditor from './components/QuizQuestionsEditor';
 import RolePermissionsManager from './components/RolePermissionsManager';
+import TokensPanel from './components/TokensPanel';
 import { PermissionGuard, PermissionNotice, PermissionProvider, useRbacSession } from './rbac/PermissionContext';
-import { ROLE_BY_KEY, SUPERADMIN_ROLE } from './rbac/permissions';
+import { DEFAULT_ROLE, ROLE_BY_KEY, SUPERADMIN_ROLE } from './rbac/permissions';
 import {
   BLANK_SETTINGS, NOTEBOOK_HOSTS_TEXT, TEMPLATE_EXAMPLE, blankModule, buildCourseWorkbook, buildDeployedWorkbook,
   importCourseWorkbook, isIsoDue, isNotebookUrl, isSheetLink, nonEmptyChoices, quizQuestionProblems, quizTotalPoints,
-  splitDue,
+  splitDue, withBrowserOffset,
 } from './lib/courseWorkbook';
 
 const YOUTUBE_ID = /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/|v\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
@@ -61,9 +64,7 @@ import {
   logOutUser, 
   subscribeToAuth, 
   subscribeToUserProfile, 
-  getAllUsersFromFirebase, 
-  updateUserCategoryInFirebase, 
-  USER_CATEGORIES, 
+  getAllUsersFromFirebase,
   checkRedirectAuthResult
 } from './services/firebaseAuthService';
 import { isFirebaseConfigured } from './firebase';
@@ -249,15 +250,23 @@ export default function App() {
   const sameAccount = Boolean(classroomUser && firebaseProfile
     && String(classroomUser.email || '').toLowerCase() === String(firebaseProfile.email || '').toLowerCase());
   const currentUser = classroomUser ? { ...(sameAccount ? firebaseProfile : {}), ...classroomUser } : null;
-  // Role-based permissions (src/rbac): the role claim of that same Firebase account, and the
-  // permissions the Superadmin gave the role. Firestore rules enforce the same.
-  const rbac = useRbacSession(sameAccount ? firebaseProfile.uid : null);
-  // Dynamic Superadmin from Firebase (Zero Hardcoding)
+
+  const handleLoginRef = useRef(null);
+
+  // Role-based permissions (src/rbac) of that same Firebase account: the owner is Superadmin, everyone
+  // else has the role the Superadmin assigned to their email, else supporter. Signed in to Classroom
+  // while Firebase is syncing or mismatched: the supporter's baseline.
+  const rbac = useRbacSession({
+    uid: sameAccount ? firebaseProfile.uid : null,
+    classroomUser,
+    onConnectFirebase: () => handleLoginRef.current?.(),
+  });
+  // The Superadmin is the owner's Google account, recognised from the Firebase sign-in
   const isSuperAdmin = Boolean(currentUser?.isSuperAdmin) || rbac.role === SUPERADMIN_ROLE;
-  // Role Permissions needs Firebase. Superadmins by profile without the role claim yet see it
-  // read-only, with how to get the claim.
-  const canOpenRoles = isFirebaseConfigured && (rbac.can('roles.manage') || isSuperAdmin);
-  // Signed-out users keep the button: creating a course asks them to log in first
+  // Role Permissions needs Firebase: the Superadmin changes it, and roles.manage can look
+  const canOpenRoles = isFirebaseConfigured && sameAccount && (rbac.can('roles.manage') || isSuperAdmin);
+  // Signed-out users keep the button: creating a course asks them to log in first.
+  // Only block creation if the account is signed in and an active role is loaded without course creation permission.
   const createBlocked = Boolean(currentUser) && !rbac.can('courses.create');
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -282,32 +291,59 @@ export default function App() {
     }
   };
 
-  // Superadmin Feature: Change any user's category/classification in Firebase
-  const handleRoleChange = async (targetUid, newCategory) => {
-    if (!targetUid || !newCategory) return;
-    try {
-      await updateUserCategoryInFirebase(targetUid, newCategory);
-      setLmsMembers(prev => prev.map(m => {
-        if ((m.uid || m.id) === targetUid) {
-          return { ...m, role: newCategory, classification: newCategory };
-        }
-        return m;
-      }));
-      showToast(`User classification updated to "${newCategory}" in Firebase!`);
-    } catch (err) {
-      console.error("Failed to update role in Firebase:", err);
-      showToast(`Role update error: ${err.message}`);
-    }
-  };
-
-  const [activeTab, setActiveTab] = useState('studio');
+  // Back from Stripe's token checkout (?tokens=...): open Tokens, which confirms the payment
+  const [activeTab, setActiveTab] = useState(() =>
+    new URLSearchParams(window.location.search).has('tokens') ? 'tokens' : 'studio');
   // Leave Role Permissions on sign-out, or when the role no longer opens it
   useEffect(() => {
     if (activeTab === 'roles' && !canOpenRoles) setActiveTab('studio');
   }, [activeTab, canOpenRoles]);
-  const [settings, setSettings] = useState(SAMPLE_PRESETS.cloud.settings);
-  const [curriculum, setCurriculum] = useState(SAMPLE_PRESETS.cloud.curriculum);
-  const [students, setStudents] = useState(SAMPLE_PRESETS.cloud.students || []);
+  // Tokens stays mounted once opened: its script binds to the panel's elements once
+  const [tokensOpened, setTokensOpened] = useState(false);
+  useEffect(() => {
+    if (activeTab === 'tokens') setTokensOpened(true);
+  }, [activeTab]);
+
+  // Persist course drafts to localStorage to prevent data loss on browser refresh or sign-in reload
+  const [settings, setSettings] = useState(() => {
+    try {
+      const saved = localStorage.getItem("gcb_draft_settings");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return SAMPLE_PRESETS.cloud.settings;
+  });
+  const [curriculum, setCurriculum] = useState(() => {
+    try {
+      const saved = localStorage.getItem("gcb_draft_curriculum");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return SAMPLE_PRESETS.cloud.curriculum;
+  });
+  const [students, setStudents] = useState(() => {
+    try {
+      const saved = localStorage.getItem("gcb_draft_students");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return SAMPLE_PRESETS.cloud.students || [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("gcb_draft_settings", JSON.stringify(settings));
+    } catch (e) {}
+  }, [settings]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("gcb_draft_curriculum", JSON.stringify(curriculum));
+    } catch (e) {}
+  }, [curriculum]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("gcb_draft_students", JSON.stringify(students));
+    } catch (e) {}
+  }, [students]);
 
   // Teacher & Student input controls
   const [newTeacherEmail, setNewTeacherEmail] = useState("");
@@ -317,9 +353,41 @@ export default function App() {
   const [studentSearchQuery, setStudentSearchQuery] = useState("");
   
   // Single-module editor navigation state
-  const [currentModuleIndex, setCurrentModuleIndex] = useState(0);
+  const [currentModuleIndex, setCurrentModuleIndex] = useState(() => {
+    try {
+      const saved = localStorage.getItem("gcb_draft_module_idx");
+      if (saved !== null) {
+        const parsed = Number(saved);
+        if (!isNaN(parsed) && parsed >= 0) return parsed;
+      }
+    } catch (e) {}
+    return 0;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("gcb_draft_module_idx", String(currentModuleIndex));
+    } catch (e) {}
+  }, [currentModuleIndex]);
+
   const [showReviewAllModal, setShowReviewAllModal] = useState(false);
-  const [importedWorkbookInfo, setImportedWorkbookInfo] = useState(null);
+  const [importedWorkbookInfo, setImportedWorkbookInfo] = useState(() => {
+    try {
+      const saved = localStorage.getItem("gcb_draft_workbook_info");
+      if (saved) return JSON.parse(saved);
+    } catch (e) {}
+    return null;
+  });
+
+  useEffect(() => {
+    try {
+      if (importedWorkbookInfo) {
+        localStorage.setItem("gcb_draft_workbook_info", JSON.stringify(importedWorkbookInfo));
+      } else {
+        localStorage.removeItem("gcb_draft_workbook_info");
+      }
+    } catch (e) {}
+  }, [importedWorkbookInfo]);
 
   // Accordion dropdown states (all elements collapsed by default upon page load)
   const [openPanels, setOpenPanels] = useState({
@@ -456,6 +524,7 @@ export default function App() {
       }
     };
     reader.readAsArrayBuffer(file);
+    e.target.value = '';
   };
 
   const handleExportStudentRoster = () => {
@@ -467,20 +536,27 @@ export default function App() {
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     XLSX.utils.book_append_sheet(wb, ws, "Students");
-    const fileName = `${settings.class_name.replace(/[^a-zA-Z0-9]/g, "_")}_Students_Roster.xlsx`;
+    const safeName = (settings.class_name || "Course").trim().replace(/[^a-zA-Z0-9]/g, "_") || "Course";
+    const fileName = `${safeName}_Students_Roster.xlsx`;
     XLSX.writeFile(wb, fileName);
     showToast(`Downloaded student roster "${fileName}"!`);
   };
 
   const [courses, setCourses] = useState([]);
-  const [toastMessage, setToastMessage] = useState(null);
+  const [toast, setToast] = useState(null);
+  const toastIdRef = React.useRef(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [deployProgress, setDeployProgress] = useState(null);
 
-  const showToast = (msg) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 4000);
+  // showToast(text) or showToast(text, 'error' | 'success' | 'info'). Without a type it is worked
+  // out from the wording. Each message gets its own id, so its timer is its own (see Toast.jsx).
+  const showToast = (msg, type) => {
+    if (!msg) return;
+    const text = String(msg);
+    toastIdRef.current += 1;
+    setToast({ id: toastIdRef.current, text, type: toastType(text, type) });
   };
+  const closeToast = useCallback(() => setToast(null), []);
 
   // Classroom access comes from the server's Google sign-in, which stores the teacher's token.
   const connectClassroom = () => { window.location.href = '/api/auth/google_login'; };
@@ -537,11 +613,11 @@ export default function App() {
     // 3. Check URL parameters for OAuth status notifications
     const params = new URLSearchParams(window.location.search);
     if (params.get("auth_success")) {
-      showToast("Signed in with Google successfully!");
+      showToast("Signed in with Google! Your course draft has been preserved.");
       window.history.replaceState({}, document.title, window.location.pathname);
     } else if (params.get("login_error")) {
       const err = params.get("login_error");
-      showToast(`Google Sign-in: ${err}`);
+      showToast(`Google Sign-in: ${err}`, 'error');
       window.history.replaceState({}, document.title, window.location.pathname);
     }
 
@@ -575,6 +651,12 @@ export default function App() {
         const userProfile = await signInWithGoogle();
         if (!userProfile) return; // Firebase redirect sign-in: Classroom is connected when it returns
         setFirebaseProfile(userProfile);
+        // If classroomUser is already logged in with the same email, we're fully synced in-place!
+        if (classroomUser && String(classroomUser.email || '').toLowerCase() === String(userProfile.email || '').toLowerCase()) {
+          showToast(`Connected Firebase account: ${userProfile.email}`);
+          setIsLoggingIn(false);
+          return;
+        }
       } catch (err) {
         console.warn("[Firebase Google Auth] continuing with the Classroom sign-in:", err);
         if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
@@ -585,6 +667,7 @@ export default function App() {
     }
     connectClassroom();
   };
+  handleLoginRef.current = handleLogin;
 
   const handleLogout = async () => {
     try {
@@ -649,7 +732,7 @@ export default function App() {
       try {
         const course = importCourseWorkbook(new Uint8Array(evt.target.result));
         if (course.curriculum.length === 0) {
-          showToast(`Nothing was loaded from "${file.name}": ${course.warnings.join(' ')}`);
+          showToast(`Nothing was loaded from "${file.name}": ${course.warnings.join(' ')}`, 'error');
           return;
         }
         applyImportedCourse(course, file.name);
@@ -661,9 +744,14 @@ export default function App() {
     e.target.value = '';
   };
 
-  // Add Week Module
+  // Add Week Module (avoids duplicate week numbers if middle weeks were deleted)
   const handleAddModule = () => {
-    const nextWeek = curriculum.length + 1;
+    const existingWeeks = curriculum.map(m => {
+      if (m.week_number && Number(m.week_number) > 0) return Number(m.week_number);
+      const match = String(m.sequence || '').match(/(\d+)/);
+      return match ? parseInt(match[1], 10) : 0;
+    }).filter(n => n > 0);
+    const nextWeek = (existingWeeks.length > 0 ? Math.max(...existingWeeks) : curriculum.length) + 1;
     // An empty week. Made-up links, a fixed due date or filler coursework here would be
     // published to Classroom as real posts if the teacher did not notice them.
     const newMod = { ...blankModule(nextWeek), title: `Module ${nextWeek}` };
@@ -699,6 +787,13 @@ export default function App() {
     setNewStudentEmail("");
     setBulkStudentText("");
     setStudentSearchQuery("");
+    try {
+      localStorage.removeItem("gcb_draft_settings");
+      localStorage.removeItem("gcb_draft_curriculum");
+      localStorage.removeItem("gcb_draft_students");
+      localStorage.removeItem("gcb_draft_workbook_info");
+      localStorage.removeItem("gcb_draft_module_idx");
+    } catch (e) {}
   };
 
   const requestClearForm = () => setClearRequest({
@@ -770,7 +865,7 @@ export default function App() {
   // Create course action (Upload to Google Classroom)
   const handleCreateCourse = async () => {
     if (!currentUser) {
-      showToast("Please log in with your Google Classroom account to publish courses.");
+      showToast("Please log in with your Google Classroom account to publish courses.", 'error');
       setShowLoginModal(true);
       return;
     }
@@ -781,7 +876,7 @@ export default function App() {
     }
 
     if (!(settings.class_name || "").trim()) {
-      showToast("Give the course a name (Course Settings) before creating it.");
+      showToast("Give the course a name (Course Settings) before creating it.", 'error');
       setOpenPanels(prev => ({ ...prev, metadata: true }));
       return;
     }
@@ -793,8 +888,18 @@ export default function App() {
       .map(e => String(typeof e === 'string' ? e : (e && e.email) || '').toLowerCase())
       .filter(e => SAMPLE_EMAILS.has(e));
     if (sampleTeachers.length > 0) {
-      showToast(`Remove the ${sampleTeachers.length} sample co-teacher(s) first (e.g. ${sampleTeachers[0]}). They are made-up addresses, and inviting them uses up your Google invitation limit. Use Clear on Course Settings.`);
+      showToast(`Remove the ${sampleTeachers.length} sample co-teacher(s) first (e.g. ${sampleTeachers[0]}). They are made-up addresses, and inviting them uses up your Google invitation limit. Use Clear on Course Settings.`, 'error');
       return;
+    }
+
+    const seenSequences = new Set();
+    for (const mod of curriculum) {
+      const seq = String(mod.sequence || '').trim().toLowerCase();
+      if (seenSequences.has(seq)) {
+        showToast(`Duplicate week name "${mod.sequence || 'Week'}": each week module must have a distinct Week name so quizzes and coursework remain properly separated.`);
+        return;
+      }
+      seenSequences.add(seq);
     }
 
     const badNotebook = curriculum.find(m => m.notebook_enabled && m.notebook_url && !isNotebookUrl(m.notebook_url));
@@ -818,7 +923,7 @@ export default function App() {
     for (const mod of curriculum) {
       const index = (mod.quiz_questions || []).findIndex(q => quizQuestionProblems(q).length > 0);
       if (index >= 0) {
-        showToast(`${mod.sequence || 'A week'}, quiz question ${index + 1}: ${quizQuestionProblems(mod.quiz_questions[index]).join('; ')} (Quiz panel).`);
+        showToast(`${mod.sequence || 'A week'}, quiz question ${index + 1}: ${quizQuestionProblems(mod.quiz_questions[index]).join('; ')} (Quiz panel).`, 'error');
         return;
       }
     }
@@ -837,10 +942,18 @@ export default function App() {
       const res = await fetch('/api/courses/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings, curriculum, students })
+        // Due dates carry the browser's offset, so a UTC server does not shift them.
+        body: JSON.stringify({
+          settings,
+          curriculum: curriculum.map(m => ({ ...m, due_date: withBrowserOffset(m.due_date) })),
+          students,
+        })
       });
       const started = await res.json().catch(() => ({}));
       if (!res.ok || !started.jobId) {
+        if (res.status === 404) {
+          throw new Error('Course creation engine is not available on this server. The course creator requires the fullstack Python backend (run "npm run dev" locally or connect your Cloud Run container).');
+        }
         throw new Error(started.error || `Server responded with status: ${res.status}`);
       }
 
@@ -862,7 +975,14 @@ export default function App() {
         if (job.status === 'error') throw new Error(job.error);
         if (job.status === 'done') {
           const failed = job.result.failedSteps || [];
-          showToast(`Created "${deployed.settings.class_name}". Class code: ${job.result.enrollmentCode || 'see Classroom'}.${failed.length ? ` ${failed.length} step(s) need attention: see the deployment log.` : ''}`);
+          showToast(`Created "${deployed.settings.class_name}". Class code: ${job.result.enrollmentCode || 'see Classroom'}.${failed.length ? ` ${failed.length} step(s) need attention: see the deployment log.` : ''}`, failed.length ? 'error' : 'success');
+          try {
+            localStorage.removeItem("gcb_draft_settings");
+            localStorage.removeItem("gcb_draft_curriculum");
+            localStorage.removeItem("gcb_draft_students");
+            localStorage.removeItem("gcb_draft_workbook_info");
+            localStorage.removeItem("gcb_draft_module_idx");
+          } catch (e) {}
           break;
         }
       }
@@ -953,13 +1073,8 @@ export default function App() {
         onDownloadWorkbook={handleDownloadDeployedWorkbook}
       />
 
-      {/* Toast Notification */}
-      {toastMessage && (
-        <div className="toast-success">
-          <CheckCircle2 size={20} color="#34a853" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
+      {/* Toast Notification (top of the screen, clear of the deployment panel) */}
+      <Toast toast={toast} onClose={closeToast} />
 
       {/* ================================================================= */}
       {/* MODAL 1: GOOGLE CLASSROOM EMAIL LOGIN DIALOG */}
@@ -1175,7 +1290,7 @@ export default function App() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <FileQuestion size={13} color="#06b6d4" />
                           <span style={{ color: mod.question_prompt ? 'var(--text-main)' : '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            Question: {mod.question_prompt ? mod.question_prompt.slice(0, 35) + "..." : "None"}
+                            Question: {mod.question_prompt ? (mod.question_prompt.length > 35 ? mod.question_prompt.slice(0, 35) + "..." : mod.question_prompt) : "None"}
                           </span>
                         </div>
 
@@ -1216,7 +1331,11 @@ export default function App() {
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
                 <CheckCircle2 size={16} color="#34a853" />
-                <span>All {curriculum.length} weeks configured with topics, materials, and coursework.</span>
+                <span>
+                  {curriculum.filter(m => m.topic_title || m.title || m.assignment_title || m.quiz_title || m.question_prompt || topicAttachmentCount(m) > 0).length === curriculum.length
+                    ? `All ${curriculum.length} week(s) configured in curriculum.`
+                    : `${curriculum.filter(m => m.topic_title || m.title || m.assignment_title || m.quiz_title || m.question_prompt || topicAttachmentCount(m) > 0).length} of ${curriculum.length} week(s) configured with coursework.`}
+                </span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1470,6 +1589,14 @@ export default function App() {
             </button>
           )}
 
+          <button
+            className={`nav-item ${activeTab === 'tokens' ? 'active' : ''}`}
+            onClick={() => setActiveTab('tokens')}
+          >
+            <Coins size={18} />
+            <span>Tokens</span>
+          </button>
+
         </nav>
 
         {/* Server & Safety Guardrail Badge */}
@@ -1495,11 +1622,13 @@ export default function App() {
               {activeTab === 'studio' && "Course Studio & Weekly Modules"}
               {activeTab === 'courses' && "Classroom Courses"}
               {activeTab === 'roles' && "Role Permissions"}
+              {activeTab === 'tokens' && "Tokens"}
             </h1>
             <p className="page-desc">
               {activeTab === 'studio' && "Step through one module at a time. All panels are collapsible dropdowns to maximize workspace."}
               {activeTab === 'courses' && "Edit your Google Classroom courses after they are created: course details, topics, classwork and announcements."}
               {activeTab === 'roles' && "Choose what each role may do. Saved to Firestore and enforced by its security rules."}
+              {activeTab === 'tokens' && "Buy tokens and see your balance. Your tokens work in all our apps."}
             </p>
           </div>
 
@@ -1528,6 +1657,25 @@ export default function App() {
                 <Trash2 size={15} color="#ea4335" />
                 <span>Clear</span>
               </button>
+            )}
+
+            {activeTab === 'studio' && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  fontSize: '0.74rem',
+                  color: 'var(--text-muted)',
+                  padding: '4px 8px',
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  borderRadius: '6px'
+                }}
+                title="Your course draft is automatically saved to local browser storage"
+              >
+                <CheckCircle2 size={13} color="#34a853" />
+                <span>Draft Auto-saved</span>
+              </span>
             )}
 
             {activeTab === 'studio' && (
@@ -1579,11 +1727,33 @@ export default function App() {
                       fontWeight: 700,
                       textTransform: 'uppercase'
                     }}>
-                      {isSuperAdmin ? "SUPERADMIN" : (ROLE_BY_KEY[rbac.role]?.label || currentUser.classification || currentUser.role || "Supporter")}
+                      {isSuperAdmin ? "SUPERADMIN" : (ROLE_BY_KEY[rbac.role] || ROLE_BY_KEY[DEFAULT_ROLE]).label}
                     </span>
                   </div>
-                  <div className="top-user-email">
-                    {currentUser.email}
+                  <div className="top-user-email" style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                    <span>{currentUser.email}</span>
+                    {isFirebaseConfigured && !sameAccount && (
+                      <button
+                        type="button"
+                        onClick={handleLogin}
+                        className="btn-sync-pill"
+                        title={firebaseProfile
+                          ? `Classroom is ${classroomUser?.email}, but Firebase is ${firebaseProfile?.email}. Click to switch Firebase account.`
+                          : "Connect Firebase profile to sync roles and permissions without signing out."}
+                        style={{
+                          background: firebaseProfile ? 'rgba(239, 68, 68, 0.15)' : 'rgba(59, 130, 246, 0.15)',
+                          border: firebaseProfile ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid rgba(59, 130, 246, 0.35)',
+                          color: firebaseProfile ? '#fca5a5' : '#93c5fd',
+                          borderRadius: '4px',
+                          padding: '1px 6px',
+                          fontSize: '0.62rem',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {firebaseProfile ? "Account Mismatch" : "Sync Firebase"}
+                      </button>
+                    )}
                   </div>
                 </div>
                 <button
@@ -1712,9 +1882,13 @@ export default function App() {
             {/* PANEL 0: COURSE METADATA & STREAM ANNOUNCEMENT (COLLAPSIBLE DROPDOWN) */}
             <div className="item-section-card" style={{ padding: 0, marginBottom: '20px' }}>
               <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={Boolean(openPanels.metadata)}
                 className="dropdown-panel-toggle"
                 onClick={() => togglePanel('metadata')}
-                style={{ borderBottom: openPanels.metadata ? '1px solid var(--border-color)' : 'none' }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePanel('metadata'); } }}
+                style={{ borderBottom: openPanels.metadata ? '1px solid var(--border-color)' : 'none', cursor: 'pointer' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <FileSpreadsheet size={20} color="#4285f4" />
@@ -1722,9 +1896,11 @@ export default function App() {
                     <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)' }}>
                       Course Settings & Stream Announcement
                     </span>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '12px' }}>
-                      {settings.class_name} ({settings.section})
-                    </span>
+                    {(settings.class_name || settings.section) && (
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '12px' }}>
+                        {settings.class_name || ''}{settings.section ? ` (${settings.section})` : ''}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1880,9 +2056,13 @@ export default function App() {
             {/* PANEL: STUDENTS & ROSTER MANAGEMENT (COLLAPSIBLE DROPDOWN - COLLAPSED ON DEFAULT) */}
             <div className="item-section-card" style={{ padding: 0, marginBottom: '20px' }}>
               <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={Boolean(openPanels.students)}
                 className="dropdown-panel-toggle"
                 onClick={() => togglePanel('students')}
-                style={{ borderBottom: openPanels.students ? '1px solid var(--border-color)' : 'none' }}
+                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePanel('students'); } }}
+                style={{ borderBottom: openPanels.students ? '1px solid var(--border-color)' : 'none', cursor: 'pointer' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <Users size={20} color="#34a853" />
@@ -2186,9 +2366,13 @@ export default function App() {
               {/* ITEM 1: TOPIC & OVERVIEW (COLLAPSIBLE DROPDOWN PANEL) */}
               <div className="item-section-card" style={{ padding: 0 }}>
                 <div
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={Boolean(openPanels.topic)}
                   className="dropdown-panel-toggle"
                   onClick={() => togglePanel('topic')}
-                  style={{ borderBottom: openPanels.topic ? '1px solid var(--border-color)' : 'none' }}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePanel('topic'); } }}
+                  style={{ borderBottom: openPanels.topic ? '1px solid var(--border-color)' : 'none', cursor: 'pointer' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <Layers size={18} color="#4285f4" />
@@ -2251,9 +2435,13 @@ export default function App() {
               {/* ITEM 2: MATERIAL - LECTURE PRESENTATION & DOCUMENT LINKS (COLLAPSIBLE DROPDOWN PANEL) */}
               <div className="item-section-card" style={{ padding: 0 }}>
                 <div
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={Boolean(openPanels.material)}
                   className="dropdown-panel-toggle"
                   onClick={() => togglePanel('material')}
-                  style={{ borderBottom: openPanels.material ? '1px solid var(--border-color)' : 'none' }}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePanel('material'); } }}
+                  style={{ borderBottom: openPanels.material ? '1px solid var(--border-color)' : 'none', cursor: 'pointer' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <Link2 size={18} color="#34a853" />
@@ -2421,9 +2609,13 @@ export default function App() {
               {/* ITEM 3: ASSIGNMENT (COLLAPSIBLE DROPDOWN PANEL) */}
               <div className="item-section-card" style={{ padding: 0 }}>
                 <div
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={Boolean(openPanels.assignment)}
                   className="dropdown-panel-toggle"
                   onClick={() => togglePanel('assignment')}
-                  style={{ borderBottom: openPanels.assignment ? '1px solid var(--border-color)' : 'none' }}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePanel('assignment'); } }}
+                  style={{ borderBottom: openPanels.assignment ? '1px solid var(--border-color)' : 'none', cursor: 'pointer' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <CheckSquare size={18} color="#fbbc05" />
@@ -2464,7 +2656,7 @@ export default function App() {
                           className="form-control"
                           placeholder="100"
                           value={currentMod.points ?? 100}
-                          onChange={e => updateCurrentMod('points', e.target.value === '' ? '' : Number(e.target.value))}
+                          onChange={e => updateCurrentMod('points', e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value) || 0)))}
                         />
                       </div>
 
@@ -2500,7 +2692,7 @@ export default function App() {
                           </p>
                         ) : (
                           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '6px' }}>
-                            Applies to this week's assignment, quiz and question. Blank time means 23:59, in this computer's time zone.
+                            Applies to this week's assignment, quiz and question. Blank time means 23:59, in your browser's time zone.
                           </p>
                         )}
                       </div>
@@ -2543,9 +2735,13 @@ export default function App() {
               {/* ITEM 4: QUIZ ASSIGNMENT (COLLAPSIBLE DROPDOWN PANEL) */}
               <div className="item-section-card" style={{ padding: 0 }}>
                 <div
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={Boolean(openPanels.quiz)}
                   className="dropdown-panel-toggle"
                   onClick={() => togglePanel('quiz')}
-                  style={{ borderBottom: openPanels.quiz ? '1px solid var(--border-color)' : 'none' }}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePanel('quiz'); } }}
+                  style={{ borderBottom: openPanels.quiz ? '1px solid var(--border-color)' : 'none', cursor: 'pointer' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <FileText size={18} color="#a855f7" />
@@ -2610,7 +2806,7 @@ export default function App() {
                             placeholder="50"
                             title="Blank means 50. 0 means ungraded."
                             value={currentMod.quiz_points ?? ""}
-                            onChange={e => updateCurrentMod('quiz_points', e.target.value === '' ? '' : Number(e.target.value))}
+                            onChange={e => updateCurrentMod('quiz_points', e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value) || 0)))}
                           />
                         )}
                       </div>
@@ -2648,15 +2844,19 @@ export default function App() {
               {/* ITEM 5: QUESTION (COLLAPSIBLE DROPDOWN PANEL) */}
               <div className="item-section-card" style={{ padding: 0 }}>
                 <div
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={Boolean(openPanels.question)}
                   className="dropdown-panel-toggle"
                   onClick={() => togglePanel('question')}
-                  style={{ borderBottom: openPanels.question ? '1px solid var(--border-color)' : 'none' }}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePanel('question'); } }}
+                  style={{ borderBottom: openPanels.question ? '1px solid var(--border-color)' : 'none', cursor: 'pointer' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                     <FileQuestion size={18} color="#06b6d4" />
                     <span style={{ fontWeight: 700, color: 'var(--text-main)' }}>5. Question (Classroom Discussion Prompt)</span>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: '8px' }}>
-                      {currentMod.question_prompt ? currentMod.question_prompt.slice(0, 30) + "..." : "Optional"}
+                      {currentMod.question_prompt ? (currentMod.question_prompt.length > 30 ? currentMod.question_prompt.slice(0, 30) + "..." : currentMod.question_prompt) : "Optional"}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -2724,7 +2924,7 @@ export default function App() {
                           placeholder="20"
                           title="Blank means 20. 0 means ungraded."
                           value={currentMod.question_points ?? ""}
-                          onChange={e => updateCurrentMod('question_points', e.target.value === '' ? '' : Number(e.target.value))}
+                          onChange={e => updateCurrentMod('question_points', e.target.value === '' ? '' : Math.max(0, Math.floor(Number(e.target.value) || 0)))}
                         />
                       </div>
                     </div>
@@ -2842,6 +3042,11 @@ export default function App() {
         {activeTab === 'roles' && canOpenRoles && (
           <RolePermissionsManager showToast={showToast} />
         )}
+
+        {/* ================================================================= */}
+        {/* TAB 4: TOKENS (BUY TOKENS; TOKEN ACCOUNTS FOR SUPERADMINS) */}
+        {/* ================================================================= */}
+        {tokensOpened && <TokensPanel hidden={activeTab !== 'tokens'} />}
 
         {/* Stripe Registration Modal */}
         <RegistrationModal

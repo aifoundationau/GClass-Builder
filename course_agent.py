@@ -359,9 +359,13 @@ def read_course_snapshot(service: Any, course_id: str) -> Dict[str, Any]:
     """
     course = classroom_api.call(service, "courses", "get", {"id": course_id})
     topics = classroom_api.list_all(service, "courses.topics", "topic", {"courseId": course_id})
-    work = classroom_api.list_all(service, "courses.courseWork", "courseWork", {"courseId": course_id})
-    materials = classroom_api.list_all(service, "courses.courseWorkMaterials", "courseWorkMaterial", {"courseId": course_id})
-    announcements = classroom_api.list_all(service, "courses.announcements", "announcements", {"courseId": course_id})
+    states = ["PUBLISHED", "DRAFT"]
+    work = classroom_api.list_all(service, "courses.courseWork", "courseWork",
+                                  {"courseId": course_id, "courseWorkStates": states})
+    materials = classroom_api.list_all(service, "courses.courseWorkMaterials", "courseWorkMaterial",
+                                       {"courseId": course_id, "courseWorkMaterialStates": states})
+    announcements = classroom_api.list_all(service, "courses.announcements", "announcements",
+                                           {"courseId": course_id, "announcementStates": states})
     teachers = classroom_api.list_all(service, "courses.teachers", "teachers", {"courseId": course_id})
     students = classroom_api.list_all(service, "courses.students", "students", {"courseId": course_id})
     rubrics, capped, rubric_errors = _read_rubrics(service, course_id, work)

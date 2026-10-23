@@ -21,6 +21,7 @@ credentials*.json
 !credentials.example.json
 # Security review with unfixed findings: keep out of the public repository
 finalreport.txt
+errorlog.txt
 # Firebase Admin service-account keys (scripts/rbac-admin.mjs)
 *-firebase-adminsdk-*.json
 service-account*.json
@@ -28,6 +29,10 @@ service_account*.json
 serviceAccount*.json
 token*.json
 user_session*.json
+lms_firebase_users.json
+!lms_firebase_users.example.json
+role_notifications.json
+!role_notifications.example.json
 * (1).*
 *.env
 *.env.local

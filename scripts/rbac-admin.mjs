@@ -1,16 +1,16 @@
-// Firebase Admin tasks for role-based access (src/rbac/permissions.js). The security rules let only
-// a superadmin change /roles and /role_assignments, and superadmin is a custom claim on the
-// person's sign-in that only the Admin SDK can set, so the first superadmin is made here.
+// Firebase Admin tasks for role-based access (src/rbac/permissions.js), with a service account. In the
+// app only the Superadmin changes /gcoursebuilder_roles and /gcoursebuilder_role_assignments; the
+// Superadmin is the owner's Google account, recognised when it signs in, and is never assigned.
 //
 // Credentials: a service-account key for the project in GOOGLE_APPLICATION_CREDENTIALS (Firebase
 // console > Project settings > Service accounts > Generate new private key), or gcloud
 // application-default credentials. The project is FIREBASE_PROJECT_ID, read from .env.
 // Against the emulators, set FIRESTORE_EMULATOR_HOST (and FIREBASE_AUTH_EMULATOR_HOST) instead.
 //
-//   node scripts/rbac-admin.mjs inspect                            /roles and /role_assignments
-//   node scripts/rbac-admin.mjs seed [--apply]                     create missing /roles documents
+//   node scripts/rbac-admin.mjs inspect                            the app's roles and role assignments
+//   node scripts/rbac-admin.mjs seed [--apply]                     create missing role documents
 //   node scripts/rbac-admin.mjs set-role <email> <role> [--apply]  give an email address a role
-//   node scripts/rbac-admin.mjs migrate-profiles [--apply]         assign the roles in /users profiles
+//   node scripts/rbac-admin.mjs copy-old-assignments [--apply]     copy /role_assignments to the app's own
 //
 // Nothing is written without --apply: each command prints what it would do.
 
@@ -18,12 +18,14 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { applicationDefault, initializeApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import {
-  BASELINE_ROLE_PERMISSIONS, DEFAULT_ROLE, PERMISSION_KEYS, ROLES, ROLES_COLLECTION, ROLE_ASSIGNMENTS_COLLECTION,
+  BASELINE_ROLE_PERMISSIONS, PERMISSION_KEYS, ROLES, ROLES_COLLECTION, ROLE_ASSIGNMENTS_COLLECTION,
   ROLE_BY_KEY, ROLE_KEYS, SUPERADMIN_ROLE, effectivePermissions, normalizeEmail, normalizeRoleKey,
 } from '../src/rbac/permissions.js';
+
+// Where role assignments were kept before the app had its own collections (only this app used it)
+const OLD_ROLE_ASSIGNMENTS_COLLECTION = 'role_assignments';
 
 try {
   process.loadEnvFile(fileURLToPath(new URL('../.env', import.meta.url)));
@@ -43,8 +45,8 @@ const USAGE = `Usage:
   node scripts/rbac-admin.mjs inspect
   node scripts/rbac-admin.mjs seed [--apply]
   node scripts/rbac-admin.mjs set-role <email> <role> [--apply]
-  node scripts/rbac-admin.mjs migrate-profiles [--apply]
-Roles: ${ROLE_KEYS.join(', ')}`;
+  node scripts/rbac-admin.mjs copy-old-assignments [--apply]
+Roles: ${ROLE_KEYS.filter(k => k !== SUPERADMIN_ROLE).join(', ')} (superadmin is the owner, never assigned)`;
 
 function fail(message) {
   console.error(message);
@@ -55,7 +57,6 @@ const dryRun = () => console.log('\nDry run: nothing was written. Run again with
 
 initializeApp(emulated ? { projectId } : { credential: applicationDefault(), projectId });
 const db = getFirestore();
-const auth = getAuth();
 
 async function readRoles() {
   const snap = await db.collection(ROLES_COLLECTION).get();
@@ -112,49 +113,22 @@ async function seed() {
   console.log(`Created ${missing.length} role document(s).`);
 }
 
-async function findUser(email) {
-  try {
-    return await auth.getUserByEmail(email);
-  } catch (err) {
-    if (err.code === 'auth/user-not-found') return null;
-    throw err;
-  }
-}
-
-// Superadmin is a claim on the account; every other role is an assignment to the email address,
-// which works before the person has ever signed in.
+// A role is an assignment to the email address, which works before the person has ever signed in.
+// Superadmin is the owner's Google account and is never assigned.
 async function setRole(emailArg, roleArg) {
   const email = normalizeEmail(emailArg);
   const role = normalizeRoleKey(roleArg);
   if (!email || !role) fail(USAGE);
-  const user = await findUser(email);
-  const claims = (user && user.customClaims) || {};
+  if (role === SUPERADMIN_ROLE) {
+    fail('Superadmin is never assigned: it is the owner\'s Google account, recognised when it signs in (SUPERADMIN_UIDS / SUPERADMIN_EMAILS in src/rbac/permissions.js).');
+  }
   const assignmentRef = db.collection(ROLE_ASSIGNMENTS_COLLECTION).doc(email);
   const assignment = await assignmentRef.get();
 
-  if (role === SUPERADMIN_ROLE) {
-    if (!user) {
-      fail(`${email} has not signed in to the app yet, so there is no account to give the claim to. Ask them to sign in once, then run this again.`);
-    }
-    console.log(`${email} (${user.uid}): role claim ${claims.role ?? '(none)'} -> ${SUPERADMIN_ROLE}`);
-    if (assignment.exists) console.log(`  and remove the email assignment "${assignment.data().role}", which the claim replaces`);
-    if (!apply) return dryRun();
-    await auth.setCustomUserClaims(user.uid, { ...claims, role: SUPERADMIN_ROLE });
-    if (assignment.exists) await assignmentRef.delete();
-    console.log('Done. It applies when their sign-in token refreshes: sign out and back in, or "Refresh my role" in Role Permissions.');
-    return;
-  }
-
   console.log(`${email}: assigned role ${assignment.exists ? assignment.data().role : '(none)'} -> ${role}`);
-  if (claims.role) console.log(`  and remove the role claim "${claims.role}", which would override the assignment`);
   if (!apply) return dryRun();
   await assignmentRef.set({ email, role, assignedAt: FieldValue.serverTimestamp(), assignedBy: WRITER });
-  if (user && claims.role) {
-    const { role: removed, ...otherClaims } = claims;
-    await auth.setCustomUserClaims(user.uid, otherClaims);
-    console.log(`Removed the "${removed}" claim. Their current sign-in keeps it until the token refreshes (within the hour, or when they sign out).`);
-  }
-  console.log(`Done. ${user ? 'The role applies straight away.' : 'The role applies when they first sign in with Google.'}`);
+  console.log('Done. The role applies straight away if they are signed in, else when they sign in with Google.');
 
   // Send Gmail API notification to recipient
   try {
@@ -178,49 +152,45 @@ async function setRole(emailArg, roleArg) {
   }
 }
 
-// Profiles from before role-based access hold a role ("CEO", "admin staff"...) that grants
-// nothing now. Assign those roles by email; superadmins are only listed (use set-role).
-async function migrateProfiles() {
-  const [users, assignments] = await Promise.all([
-    db.collection('users').get(),
+// Role assignments made before the app had its own collections are copied to
+// /gcoursebuilder_role_assignments; emails already assigned there keep their role.
+async function copyOldAssignments() {
+  const [old, current] = await Promise.all([
+    db.collection(OLD_ROLE_ASSIGNMENTS_COLLECTION).get(),
     db.collection(ROLE_ASSIGNMENTS_COLLECTION).get(),
   ]);
-  const assigned = new Set(assignments.docs.map(d => d.id));
-  const toAssign = [];
-  for (const d of users.docs) {
-    const data = d.data();
-    const email = normalizeEmail(data.email);
-    const profileRole = data.role || data.classification;
-    const role = normalizeRoleKey(profileRole);
-    if (!email || !profileRole || role === DEFAULT_ROLE) continue;
-    if (!role) console.log(`  skip      ${String(email).padEnd(40)} unknown role "${profileRole}"`);
-    else if (role === SUPERADMIN_ROLE) console.log(`  skip      ${email.padEnd(40)} "${profileRole}": run set-role ${email} superadmin if they should be one`);
+  const assigned = new Set(current.docs.map(d => d.id));
+  const toCopy = [];
+  for (const d of old.docs) {
+    const email = normalizeEmail(d.id);
+    const role = normalizeRoleKey(d.data().role);
+    if (!email || !role || role === SUPERADMIN_ROLE) console.log(`  skip      ${String(d.id).padEnd(40)} role "${d.data().role}"`);
     else if (assigned.has(email)) console.log(`  keep      ${email.padEnd(40)} already assigned`);
     else {
-      console.log(`  assign    ${email.padEnd(40)} "${profileRole}" -> ${role}`);
-      toAssign.push({ email, role });
+      console.log(`  copy      ${email.padEnd(40)} ${role}`);
+      toCopy.push({ email, role });
     }
   }
-  console.log(`\n${users.size} profile(s); ${toAssign.length} role assignment(s) to create.`);
-  if (toAssign.length === 0) return;
+  console.log(`\n${old.size} old assignment(s); ${toCopy.length} to copy to /${ROLE_ASSIGNMENTS_COLLECTION}.`);
+  if (toCopy.length === 0) return;
   if (!apply) return dryRun();
-  for (let i = 0; i < toAssign.length; i += 400) {
+  for (let i = 0; i < toCopy.length; i += 400) {
     const batch = db.batch();
-    for (const { email, role } of toAssign.slice(i, i + 400)) {
+    for (const { email, role } of toCopy.slice(i, i + 400)) {
       batch.create(db.collection(ROLE_ASSIGNMENTS_COLLECTION).doc(email), {
         email, role, assignedAt: FieldValue.serverTimestamp(), assignedBy: WRITER,
       });
     }
     await batch.commit();
   }
-  console.log(`Created ${toAssign.length} role assignment(s).`);
+  console.log(`Copied ${toCopy.length} role assignment(s).`);
 }
 
 const commands = {
   inspect,
   seed,
   'set-role': () => setRole(args[0], args[1]),
-  'migrate-profiles': migrateProfiles,
+  'copy-old-assignments': copyOldAssignments,
 };
 
 if (!commands[command]) {
