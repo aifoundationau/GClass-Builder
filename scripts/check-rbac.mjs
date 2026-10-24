@@ -47,11 +47,17 @@ check('24 unique permissions in 5 groups', () => {
   assert.deepEqual(counts, [6, 4, 5, 4, 5]);
 });
 
-check('11 roles with distinct levels, superadmin highest', () => {
-  assert.equal(ROLES.length, 11);
-  assert.equal(new Set(ROLE_KEYS).size, 11);
-  assert.equal(new Set(ROLES.map(r => r.level)).size, 11);
+check('12 roles with distinct levels, superadmin highest', () => {
+  assert.equal(ROLES.length, 12);
+  assert.equal(new Set(ROLE_KEYS).size, 12);
+  assert.equal(new Set(ROLES.map(r => r.level)).size, 12);
   assert.equal(ROLES[0].key, SUPERADMIN_ROLE);
+  assert.equal(ROLES[1].key, 'chiefadmin');
+  assert.equal(ROLES[1].level, 95);
+  assert.equal(ROLES[2].key, 'administration');
+  assert.equal(ROLES[2].level, 92);
+  assert.equal(ROLES[3].key, 'chancellor');
+  assert.equal(ROLES[3].level, 90);
   assert.equal(DEFAULT_ROLE, 'supporter');
   assert.deepEqual(ASSIGNABLE_ROLE_KEYS, ROLE_KEYS.filter(k => k !== SUPERADMIN_ROLE));
 });
@@ -83,6 +89,7 @@ check('baseline lists only known permissions, superadmin all', () => {
     for (const p of list) assert.ok(PERMISSION_KEYS.includes(p), `${role}: unknown permission ${p}`);
   }
   assert.deepEqual(BASELINE_ROLE_PERMISSIONS.superadmin, PERMISSION_KEYS);
+  assert.deepEqual(BASELINE_ROLE_PERMISSIONS.chiefadmin, PERMISSION_KEYS);
   assert.deepEqual(BASELINE_ROLE_PERMISSIONS.supporter, ['courses.view']);
 });
 
@@ -97,7 +104,7 @@ check('older profile categories map to roles', () => {
   const legacy = {
     Supporter: 'supporter', student: 'student', teacher: 'teacher', 'admin staff': 'administration', CEO: 'ceo',
     COO: 'coo', CFO: 'cfo', 'Financial team': 'accounting', Superadmin: 'superadmin', instructor: 'teacher',
-    school_admin: 'administration', ' President ': 'president',
+    school_admin: 'administration', ' President ': 'president', 'Chief Admin': 'chiefadmin', chief_admin: 'chiefadmin',
   };
   for (const [value, role] of Object.entries(legacy)) assert.equal(normalizeRoleKey(value), role, value);
   for (const value of ['', null, undefined, 'janitor']) assert.equal(normalizeRoleKey(value), null);

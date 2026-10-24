@@ -33,13 +33,13 @@ const sameSet = (stored, shown) => {
 const formatTime = (ts) => (ts && typeof ts.toDate === 'function' ? ts.toDate().toLocaleString() : '');
 
 const saveError = (err) => (err && err.code === 'permission-denied'
-  ? 'Firestore refused the write: only the Superadmin (the owner\'s Google account) can save, and the shared Firestore rules with this app\'s roles must be deployed.'
+  ? 'Firestore refused the write: only Superadmin or Chief Admin can save, and the shared Firestore rules with this app\'s roles must be deployed.'
   : (err && err.message) || String(err));
 
 export default function RolePermissionsManager({ showToast }) {
   const rbac = useRbac();
-  // firestore.rules accept role writes only from the Superadmin: the owner's Google account
-  const canEdit = rbac.role === SUPERADMIN_ROLE;
+  // Superadmin or Chief Admin (users with roles.manage permission) can configure permissions and assign roles
+  const canEdit = rbac.role === SUPERADMIN_ROLE || rbac.role === 'chiefadmin' || rbac.can('roles.manage');
   const me = auth.currentUser;
 
   const [stored, setStored] = useState(null); // { roleKey: Firestore data }, null until read
@@ -134,7 +134,8 @@ export default function RolePermissionsManager({ showToast }) {
 
   const saveAll = async () => {
     if (pending.length === 0) return;
-    const roles = pending;
+    const roles = rbac.role === SUPERADMIN_ROLE ? pending : pending.filter(k => k !== SUPERADMIN_ROLE);
+    if (roles.length === 0) return;
     setSaving('all');
     try {
       await saveAllRolePermissions(Object.fromEntries(roles.map(k => [k, current[k]])), me && me.uid);

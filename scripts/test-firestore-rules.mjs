@@ -31,6 +31,7 @@ const as = (uid, { email = `${uid}@example.com`, verified = true, ...claims } = 
 
 const OWNER = SUPERADMIN_UIDS[0];
 const superadmin = as(OWNER, { email: SUPERADMIN_EMAILS[0] }); // the owner
+const chiefadmin = as('ca'); // assigned "chiefadmin" by email below
 const office = as('ad'); // assigned "administration" by email below
 const teacher = as('te'); // assigned "teacher" by email below
 const newcomer = as('su'); // no assignment: supporter
@@ -51,9 +52,10 @@ async function reset() {
         roleName: r.label, permissions: BASELINE_ROLE_PERMISSIONS[r.key], updatedAt: new Date(), updatedBy: 'seed',
       });
     }
+    await setDoc(doc(db, ROLE_ASSIGNMENTS_COLLECTION, 'ca@example.com'), { email: 'ca@example.com', role: 'chiefadmin', assignedAt: new Date(), assignedBy: OWNER });
     await setDoc(doc(db, ROLE_ASSIGNMENTS_COLLECTION, 'ad@example.com'), { email: 'ad@example.com', role: 'administration', assignedAt: new Date(), assignedBy: OWNER });
     await setDoc(doc(db, ROLE_ASSIGNMENTS_COLLECTION, 'te@example.com'), { email: 'te@example.com', role: 'teacher', assignedAt: new Date(), assignedBy: OWNER });
-    for (const uid of [OWNER, 'ad', 'te', 'su']) {
+    for (const uid of [OWNER, 'ca', 'ad', 'te', 'su']) {
       await setDoc(doc(db, 'users', uid), { email: `${uid}@example.com`, role: 'supporter', status: 'supporter', token_balance: 40 });
     }
   });
@@ -61,15 +63,16 @@ async function reset() {
 
 await reset();
 
-await check('only the owner writes the roles', async () => {
+await check('Superadmin and Chief Admin (roles.manage) configure role permissions; superadmin cannot be modified by Chief Admin', async () => {
   const teacherPermissions = ['courses.view', 'courses.create'];
   await assertSucceeds(setDoc(doc(superadmin, ROLES_COLLECTION, 'teacher'), roleDoc('teacher', teacherPermissions, OWNER)));
+  // Chief Admin can configure permissions for any role except superadmin
+  await assertSucceeds(setDoc(doc(chiefadmin, ROLES_COLLECTION, 'teacher'), roleDoc('teacher', PERMISSION_KEYS, 'ca')));
+  await assertFails(setDoc(doc(chiefadmin, ROLES_COLLECTION, 'superadmin'), roleDoc('superadmin', ['courses.view'], 'ca')));
+  // Roles without roles.manage cannot write roles
   await assertFails(setDoc(doc(teacher, ROLES_COLLECTION, 'teacher'), roleDoc('teacher', PERMISSION_KEYS, 'te')));
   await assertFails(setDoc(doc(newcomer, ROLES_COLLECTION, 'supporter'), roleDoc('supporter', PERMISSION_KEYS, 'su')));
   await assertFails(setDoc(doc(anonymous, ROLES_COLLECTION, 'supporter'), roleDoc('supporter', [], 'x')));
-  // roles.manage is not enough: writes need the owner
-  await assertSucceeds(setDoc(doc(superadmin, ROLES_COLLECTION, 'administration'), roleDoc('administration', ['roles.manage', 'users.manage'], OWNER)));
-  await assertFails(setDoc(doc(office, ROLES_COLLECTION, 'teacher'), roleDoc('teacher', PERMISSION_KEYS, 'ad')));
 });
 
 await check('the owner is recognised by uid or verified email; a role claim grants nothing', async () => {
@@ -141,18 +144,21 @@ await check('the owner keeps every permission even without its role document', a
 
 await reset();
 
-await check('only the owner gives roles to email addresses', async () => {
+await check('Superadmin and Chief Admin give roles to email addresses; superadmin role cannot be assigned', async () => {
   const assign = (db, email, role, uid) => setDoc(doc(db, ROLE_ASSIGNMENTS_COLLECTION, email), assignment(email, role, uid));
   await assertSucceeds(assign(superadmin, 'new.teacher@example.com', 'teacher', OWNER));
-  await assertFails(assign(office, 'friend@example.com', 'chancellor', 'ad'));
-  await assertFails(assign(teacher, 'te@example.com', 'president', 'te'));
+  await assertSucceeds(assign(chiefadmin, 'new.student@example.com', 'student', 'ca'));
+  // Neither Superadmin nor Chief Admin can assign the superadmin role
+  await assertFails(assign(chiefadmin, 'boss@example.com', 'superadmin', 'ca'));
   await assertFails(assign(superadmin, 'boss@example.com', 'superadmin', OWNER));
+  await assertFails(assign(teacher, 'te@example.com', 'president', 'te'));
   await assertFails(assign(superadmin, 'x@example.com', 'janitor', OWNER));
   await assertFails(assign(superadmin, 'Mixed@Example.com', 'teacher', OWNER));
   await assertFails(setDoc(doc(superadmin, ROLE_ASSIGNMENTS_COLLECTION, 'a@example.com'), assignment('b@example.com', 'teacher', OWNER)));
   await assertFails(setDoc(doc(superadmin, ROLE_ASSIGNMENTS_COLLECTION, 'a@example.com'), { ...assignment('a@example.com', 'teacher', OWNER), note: 'x' }));
+  await assertSucceeds(deleteDoc(doc(chiefadmin, ROLE_ASSIGNMENTS_COLLECTION, 'new.student@example.com')));
   await assertSucceeds(deleteDoc(doc(superadmin, ROLE_ASSIGNMENTS_COLLECTION, 'new.teacher@example.com')));
-  await assertFails(deleteDoc(doc(office, ROLE_ASSIGNMENTS_COLLECTION, 'te@example.com')));
+  await assertFails(deleteDoc(doc(teacher, ROLE_ASSIGNMENTS_COLLECTION, 'te@example.com')));
 });
 
 await check('people read their own assignment; listing needs users.manage', async () => {

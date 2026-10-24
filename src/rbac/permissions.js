@@ -1,4 +1,4 @@
-// Role-based access control (RBAC) catalog: the 24 permissions, the 11 system roles and the
+// Role-based access control (RBAC) catalog: the 24 permissions, the 12 system roles and the
 // baseline permissions each role is seeded with. Firestore keeps the live data, which the
 // Superadmin edits in Role Permissions. The collections carry the app's tag, because roles and
 // permissions belong to this app alone (other apps sharing the Firebase project have their own):
@@ -102,6 +102,10 @@ export const PERMISSION_BY_KEY = Object.fromEntries(PERMISSIONS.map(p => [p.key,
 export const ROLES = [
   { key: 'superadmin', label: 'Superadmin', level: 100,
     description: 'Unrestricted access across every system, including role permissions. Always holds every permission.' },
+  { key: 'chiefadmin', label: 'Chief Admin', level: 95,
+    description: 'Senior administrative authority ahead of chancellor. Can perform all administrative functions and configure role permissions for all roles except superadmin.' },
+  { key: 'administration', label: 'Administration', level: 92,
+    description: 'Admissions office, student records and user accounts, plus campus content.' },
   { key: 'chancellor', label: 'Chancellor', level: 90,
     description: 'Institutional oversight of academic standing, admissions and finance.' },
   { key: 'president', label: 'President', level: 85,
@@ -114,8 +118,6 @@ export const ROLES = [
     description: 'Finance leadership: ledgers, approvals and the emergency fund.' },
   { key: 'accounting', label: 'Accounting', level: 60,
     description: 'Day-to-day finance: ledgers, approvals and emergency tokens.' },
-  { key: 'administration', label: 'Administration', level: 50,
-    description: 'Admissions office, student records and user accounts, plus campus content.' },
   { key: 'teacher', label: 'Teacher', level: 40,
     description: 'Builds and teaches courses in Google Classroom and grades students.' },
   { key: 'student', label: 'Student', level: 30,
@@ -132,6 +134,12 @@ export const ASSIGNABLE_ROLE_KEYS = ROLE_KEYS.filter(k => k !== SUPERADMIN_ROLE)
 // What /roles is seeded with when a document is missing. The Superadmin changes it from there.
 export const BASELINE_ROLE_PERMISSIONS = {
   superadmin: PERMISSION_KEYS,
+  chiefadmin: PERMISSION_KEYS,
+  administration: [
+    'courses.view', 'applications.view', 'applications.review', 'applications.export', 'students.manage',
+    'events.manage', 'calendar.manage', 'faqs.edit', 'messaging.staff', 'users.manage', 'sheets.sync',
+    'campus_metrics.manage',
+  ],
   chancellor: [
     'courses.view', 'grades.view', 'applications.view', 'finance.view', 'events.manage', 'calendar.manage',
     'messaging.staff', 'telemetry.view',
@@ -150,11 +158,6 @@ export const BASELINE_ROLE_PERMISSIONS = {
   ],
   cfo: ['applications.view', 'finance.view', 'finance.approve', 'tokens.manage', 'messaging.staff', 'telemetry.view'],
   accounting: ['applications.view', 'finance.view', 'finance.approve', 'tokens.manage', 'messaging.staff'],
-  administration: [
-    'courses.view', 'applications.view', 'applications.review', 'applications.export', 'students.manage',
-    'events.manage', 'calendar.manage', 'faqs.edit', 'messaging.staff', 'users.manage', 'sheets.sync',
-    'campus_metrics.manage',
-  ],
   teacher: [
     'courses.view', 'courses.create', 'courses.publish', 'grades.view', 'grades.edit', 'classroom.manage',
     'events.manage', 'messaging.staff',
@@ -167,6 +170,8 @@ export const BASELINE_ROLE_PERMISSIONS = {
 const ROLE_ALIASES = {
   'super admin': 'superadmin',
   super_admin: 'superadmin',
+  'chief admin': 'chiefadmin',
+  chief_admin: 'chiefadmin',
   'admin staff': 'administration',
   admin: 'administration',
   administrator: 'administration',

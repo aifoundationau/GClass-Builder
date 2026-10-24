@@ -35,7 +35,7 @@ service cloud.firestore {
       return isSuperAdmin() || (
         isAuthenticated() &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['admin', 'super_admin', 'superadmin']
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') in ['admin', 'super_admin', 'superadmin', 'chiefadmin']
       );
     }
 
@@ -167,7 +167,7 @@ service cloud.firestore {
     }
 
     function gcbRoleKeys() {
-      return ['superadmin', 'chancellor', 'president', 'ceo', 'coo', 'cfo', 'accounting', 'administration',
+      return ['superadmin', 'chiefadmin', 'administration', 'chancellor', 'president', 'ceo', 'coo', 'cfo', 'accounting',
               'teacher', 'student', 'supporter'];
     }
 
@@ -212,20 +212,24 @@ service cloud.firestore {
         && data.assignedBy == request.auth.uid;
     }
 
-    // Role permissions: readable when signed in, written only by the SuperAdmin
+    // Role permissions: readable when signed in, written by SuperAdmin, or by users holding roles.manage
+    // (such as Chief Admin) for all roles except superadmin.
     match /gcoursebuilder_roles/{roleId} {
       allow read: if isAuthenticated();
-      allow create, update: if isSuperAdmin() && gcbIsValidRoleDoc(roleId);
+      allow create, update: if (isSuperAdmin() || (gcbHasPermission('roles.manage') && roleId != 'superadmin'))
+        && gcbIsValidRoleDoc(roleId);
       allow delete: if false;
     }
 
-    // Roles given to email addresses: people can read their own; the SuperAdmin changes them
+    // Roles given to email addresses: people can read their own; SuperAdmin and users with users.manage
+    // (such as Chief Admin) can assign all roles except superadmin.
     match /gcoursebuilder_role_assignments/{email} {
       allow read: if isSuperAdmin()
         || gcbHasPermission('users.manage')
         || (isAuthenticated() && gcbHasVerifiedEmail() && request.auth.token.email.lower() == email);
-      allow create, update: if isSuperAdmin() && gcbIsValidAssignment(email);
-      allow delete: if isSuperAdmin();
+      allow create, update: if (isSuperAdmin() || gcbHasPermission('users.manage'))
+        && gcbIsValidAssignment(email);
+      allow delete: if isSuperAdmin() || gcbHasPermission('users.manage');
     }
 
     // Fallback for other tenants' collections (unchanged behaviour),
