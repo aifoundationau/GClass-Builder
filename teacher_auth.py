@@ -23,6 +23,9 @@ SESSIONS_FILE = os.path.join(TEACHER_DIR, "_sessions.json")
 SESSION_COOKIE = "lms_sid"
 GOOGLE_API_TIMEOUT_SECONDS = 60
 GOOGLE_API_RETRIES = 4
+# The sign-in's Google ID token (valid for an hour) is handed to the browser for this long, so it can
+# sign the same account in to Firebase (roles and tokens) without a second Google window
+FIREBASE_ID_TOKEN_SECONDS = 50 * 60
 
 
 class RetryingHttpRequest(HttpRequest):
@@ -108,15 +111,25 @@ def load_credentials(email: str):
     return creds if creds.valid else None
 
 
-def create_session(email: str, profile: Optional[Dict[str, Any]] = None) -> str:
-    """Create a session id for a signed-in teacher and return it. The profile is kept so /api/auth/me needs no Google call."""
+def create_session(email: str, profile: Optional[Dict[str, Any]] = None, id_token: Optional[str] = None) -> str:
+    """Create a session id for a signed-in teacher and return it. The profile is kept so /api/auth/me needs no Google call,
+    and the sign-in's Google ID token so the browser can sign the same account in to Firebase."""
     sid = secrets.token_urlsafe(32)
     sessions = _read_json(SESSIONS_FILE, {})
     sessions[sid] = {"email": email.strip().lower(),
                      "profile": profile or {},
                      "created": datetime.now(timezone.utc).isoformat()}
+    if id_token:
+        sessions[sid]["id_token"] = id_token
     _write_json(SESSIONS_FILE, sessions)
     return sid
+
+
+def _seconds_since(iso_time: Optional[str]) -> float:
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(str(iso_time))).total_seconds()
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 def session_profile(sid: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -137,7 +150,10 @@ def session_profile(sid: Optional[str]) -> Optional[Dict[str, Any]]:
         entry["profile"] = profile
         sessions[sid] = entry
         _write_json(SESSIONS_FILE, sessions)
-    return {**profile, "authenticated": True}
+    result = {**profile, "authenticated": True}
+    if entry.get("id_token") and _seconds_since(entry.get("created")) < FIREBASE_ID_TOKEN_SECONDS:
+        result["firebase_id_token"] = entry["id_token"]
+    return result
 
 
 def email_for_session(sid: Optional[str]) -> Optional[str]:

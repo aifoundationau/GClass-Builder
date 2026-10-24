@@ -21,10 +21,11 @@ test('parseAmount: whole dollars by default, cents with decimals: 2', () => {
     }
 });
 
-test('parseTokenQuantity: from 10 up; purchases must be a multiple of 10; spends and grants can allow 1', () => {
+test('parseTokenQuantity: purchases take any whole number from 10; multipleOf when asked; spends and grants can allow 1', () => {
     assert.equal(pricing.parseTokenQuantity('10'), 10);
     assert.equal(pricing.parseTokenQuantity('1,500'), 1500);
     assert.equal(pricing.parseTokenQuantity(15), 15);
+    assert.equal(pricing.parseTokenQuantity('37'), 37);
     for (const value of ['9', '0', '15.5', '-10', 'abc', 1000000001, null]) assert.ok(Number.isNaN(pricing.parseTokenQuantity(value)), String(value));
     const tens = { multipleOf: pricing.TOKEN_LIMITS.step };
     assert.equal(pricing.parseTokenQuantity('20', tens), 20);

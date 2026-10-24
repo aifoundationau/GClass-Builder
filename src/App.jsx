@@ -65,9 +65,10 @@ import {
   subscribeToAuth, 
   subscribeToUserProfile, 
   getAllUsersFromFirebase,
-  checkRedirectAuthResult
+  checkRedirectAuthResult,
+  signInWithGoogleIdToken
 } from './services/firebaseAuthService';
-import { isFirebaseConfigured } from './firebase';
+import { auth, isFirebaseConfigured } from './firebase';
 
 // Course points as the server reads them: blank means the default, 0 means ungraded.
 const pointsOr = (value, fallback) => (value === '' || value == null || Number.isNaN(Number(value)) ? fallback : Number(value));
@@ -251,7 +252,7 @@ export default function App() {
     && String(classroomUser.email || '').toLowerCase() === String(firebaseProfile.email || '').toLowerCase());
   const currentUser = classroomUser ? { ...(sameAccount ? firebaseProfile : {}), ...classroomUser } : null;
 
-  const handleLoginRef = useRef(null);
+  const connectFirebaseRef = useRef(null);
 
   // Role-based permissions (src/rbac) of that same Firebase account: the owner is Superadmin, everyone
   // else has the role the Superadmin assigned to their email, else supporter. Signed in to Classroom
@@ -259,7 +260,7 @@ export default function App() {
   const rbac = useRbacSession({
     uid: sameAccount ? firebaseProfile.uid : null,
     classroomUser,
-    onConnectFirebase: () => handleLoginRef.current?.(),
+    onConnectFirebase: () => connectFirebaseRef.current?.(),
   });
   // The Superadmin is the owner's Google account, recognised from the Firebase sign-in
   const isSuperAdmin = Boolean(currentUser?.isSuperAdmin) || rbac.role === SUPERADMIN_ROLE;
@@ -562,13 +563,31 @@ export default function App() {
   const connectClassroom = () => { window.location.href = '/api/auth/google_login'; };
 
   // Who is signed in to Classroom (cheap: the server reads its own session file)
+  // One Google sign-in for both: after the Classroom sign-in, /api/auth/me hands over its Google ID
+  // token for a while, and that signs the same account in to Firebase (roles, tokens), so there is no
+  // second Google window. Each token is tried once; Sync Firebase is the fallback.
+  const triedIdTokens = useRef(new Set());
+  const connectFirebaseFromSignIn = async (email, idToken) => {
+    if (!isFirebaseConfigured || !idToken || triedIdTokens.current.has(idToken)) return;
+    triedIdTokens.current.add(idToken);
+    await auth.authStateReady();
+    if (String(auth.currentUser?.email || '').toLowerCase() === String(email || '').toLowerCase()) return;
+    try {
+      await signInWithGoogleIdToken(idToken);
+    } catch (err) {
+      console.warn("[Firebase Auth] Could not sign in to Firebase with the Google sign-in:", err.code || err.message);
+    }
+  };
+
   const refreshSession = async () => {
     try {
       const authRes = await fetch('/api/auth/me');
-      const user = authRes.ok ? await authRes.json() : null;
-      if (user && user.authenticated) {
+      const data = authRes.ok ? await authRes.json() : null;
+      if (data && data.authenticated) {
+        const { firebase_id_token: idToken, ...user } = data;
         setClassroomUser(prev => (JSON.stringify(prev) === JSON.stringify(user) ? prev : user));
         localStorage.setItem("gcb_user_session", JSON.stringify(user));
+        connectFirebaseFromSignIn(user.email, idToken);
         return user;
       }
       setClassroomUser(null);
@@ -642,32 +661,30 @@ export default function App() {
     return () => unsub();
   }, [firebaseUid]);
 
-  // Sign-in: the Firebase LMS profile first when Firebase is configured, then the Google sign-in
-  // that gives Course Builder access to Classroom. A Firebase problem never blocks Classroom.
-  const handleLogin = async () => {
+  // Sign-in: one Google window, for Classroom access. The same account is then signed in to
+  // Firebase from that sign-in (refreshSession), so its role applies straight away.
+  const handleLogin = () => {
     setIsLoggingIn(true);
-    if (isFirebaseConfigured) {
-      try {
-        const userProfile = await signInWithGoogle();
-        if (!userProfile) return; // Firebase redirect sign-in: Classroom is connected when it returns
-        setFirebaseProfile(userProfile);
-        // If classroomUser is already logged in with the same email, we're fully synced in-place!
-        if (classroomUser && String(classroomUser.email || '').toLowerCase() === String(userProfile.email || '').toLowerCase()) {
-          showToast(`Connected Firebase account: ${userProfile.email}`);
-          setIsLoggingIn(false);
-          return;
-        }
-      } catch (err) {
-        console.warn("[Firebase Google Auth] continuing with the Classroom sign-in:", err);
-        if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
-          setIsLoggingIn(false);
-          return;
-        }
-      }
-    }
     connectClassroom();
   };
-  handleLoginRef.current = handleLogin;
+
+  // Sync Firebase: Firebase's own Google window, for when the Classroom sign-in could not sign in to
+  // Firebase (an older session, or a Firebase problem). A Firebase problem never blocks Classroom.
+  const handleConnectFirebase = async () => {
+    if (!isFirebaseConfigured) return;
+    try {
+      const userProfile = await signInWithGoogle();
+      if (!userProfile) return; // Firebase redirect sign-in: finished when it returns
+      setFirebaseProfile(userProfile);
+      showToast(`Connected Firebase account: ${userProfile.email}`);
+    } catch (err) {
+      if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+        console.warn("[Firebase Google Auth] Sync Firebase failed:", err);
+        showToast(`Could not connect Firebase: ${err.message}`, 'error');
+      }
+    }
+  };
+  connectFirebaseRef.current = handleConnectFirebase;
 
   const handleLogout = async () => {
     try {
@@ -1735,7 +1752,7 @@ export default function App() {
                     {isFirebaseConfigured && !sameAccount && (
                       <button
                         type="button"
-                        onClick={handleLogin}
+                        onClick={handleConnectFirebase}
                         className="btn-sync-pill"
                         title={firebaseProfile
                           ? `Classroom is ${classroomUser?.email}, but Firebase is ${firebaseProfile?.email}. Click to switch Firebase account.`

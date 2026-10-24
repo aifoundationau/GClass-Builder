@@ -277,7 +277,7 @@ def _finish_google_login(handler) -> None:
         if not email:
             raise ValueError("Google did not return an email address for this account.")
         teacher_auth.save_credentials(email, creds.to_json())
-        sid = teacher_auth.create_session(email, teacher_auth.profile_from_info(info))
+        sid = teacher_auth.create_session(email, teacher_auth.profile_from_info(info), getattr(creds, "id_token", None))
         _redirect(handler, "/?auth_success=1", teacher_auth.session_cookie_header(sid))
     except Exception as exc:
         print(f"[AUTH] Google sign-in failed: {exc}", flush=True)

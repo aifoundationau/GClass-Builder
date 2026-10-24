@@ -6,7 +6,7 @@ import React, { memo, useEffect } from 'react';
 
 // Raise a ?v= number whenever that file in public/ changes, so browsers load the new copy
 const STYLESHEET = '/tokens.css?v=1';
-const SCRIPTS = ['/token-pricing.js?v=1', '/tokens-ui.js?v=1']; // in this order: tokens-ui.js needs token-pricing.js
+const SCRIPTS = ['/token-pricing.js?v=1', '/tokens-ui.js?v=2']; // in this order: tokens-ui.js needs token-pricing.js
 
 const MARKUP = `
 <!-- Shown until the visitor signs in with Google -->
@@ -20,7 +20,7 @@ const MARKUP = `
     <!-- BUY TOKENS -->
     <section id="buyTokensSection" class="tokens-card">
         <h2>Buy Tokens</h2>
-        <p class="tokens-intro">Tokens are bought 10 at a time, with no upper limit. Pay securely by card: tokens are added to your balance as soon as your payment goes through, and work in all our apps.</p>
+        <p class="tokens-intro">Buy any number of tokens from 10, with no upper limit. Pay securely by card: tokens are added to your balance as soon as your payment goes through, and work in all our apps.</p>
         <div class="tokens-balance">
             <span>Your balance</span>
             <strong id="buyTokensBalance">...</strong>
@@ -33,7 +33,7 @@ const MARKUP = `
             </label>
             <button type="button" id="buyTokensMore" class="tokens-step" aria-label="10 more tokens">+</button>
         </div>
-        <p id="buyTokensHint" class="tokens-hint">Starts at 10. Press + to add 10 more each time (or &minus; to take 10 off), or type any multiple of 10.</p>
+        <p id="buyTokensHint" class="tokens-hint">Starts at 10. Press + to add 10 more each time (or &minus; to take 10 off), or type any amount from 10.</p>
         <div id="buyTokensTotal" class="tokens-total" aria-live="polite"></div>
         <button type="button" id="buyTokensPayBtn" class="tokens-btn tokens-btn-wide" disabled>Pay with Card</button>
         <div class="tokens-secure">Secure payments powered by Stripe</div>

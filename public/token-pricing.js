@@ -5,7 +5,8 @@
  * - One token costs the price set in AI Foundation's admin panel (Services & Pricing, "Tokens"), USD $1 by default.
  *   Visitors in Australia pay the AUD price when one is set; everyone else pays USD.
  * - Token prices keep their cents (AUD 1.43). Other prices in an app are whole dollars (decimals: 0).
- * - Tokens are bought 10 at a time: the box starts at 10 and + / - change it by 10, with no upper limit.
+ * - Buyers choose any whole number of tokens from 10, with no upper limit: the box starts at 10 and + / - change it
+ *   by 10, and any amount from 10 can be typed.
  */
 (function (root) {
     'use strict';
@@ -69,7 +70,7 @@
     }
 
     // A number of tokens as a whole number, or NaN when it isn't one from min to TOKEN_LIMITS.max or isn't a multiple of
-    // multipleOf (purchases pass TOKEN_LIMITS.step: tokens are bought 10 at a time). Accepts "300" or "1,500" too
+    // multipleOf (1 unless given: purchases take any amount from TOKEN_LIMITS.min). Accepts "300" or "1,500" too
     function parseTokenQuantity(value, { min = TOKEN_LIMITS.min, multipleOf = 1 } = {}) {
         let quantity;
         if (typeof value === 'number') {

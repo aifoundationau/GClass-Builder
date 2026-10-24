@@ -17,9 +17,8 @@
     }
 
     // The - / amount / + controls. The amount starts at 10 and each press moves it to the next or previous 10, with no
-    // upper limit. Any whole number can be typed; with wholeSteps (Buy Tokens: tokens are bought 10 at a time) it's
-    // rounded up to a multiple of 10 on leaving the box. onChange runs after every change
-    function setupTokenStepper({ input, less, more, onChange, wholeSteps = false }) {
+    // upper limit. Any whole number from 10 can be typed. onChange runs after every change
+    function setupTokenStepper({ input, less, more, onChange }) {
         const limits = () => pricing.TOKEN_LIMITS;
         const typed = () => parseInt(String(input.value).replace(/\D/g, ''), 10);
 
@@ -46,10 +45,9 @@
             refresh();
         });
         input.addEventListener('blur', () => {
-            const { min, max, step: by } = limits();
+            const { min, max } = limits();
             const value = typed();
-            const rounded = wholeSteps && Number.isFinite(value) ? Math.ceil(value / by) * by : value;
-            input.value = String(Number.isFinite(rounded) ? Math.min(max, Math.max(min, rounded)) : min);
+            input.value = String(Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : min);
             refresh();
         });
         less.addEventListener('click', () => step(-1));
@@ -76,11 +74,11 @@
     if (stripeReturn) window.history.replaceState({}, document.title, window.location.pathname);
 
     function renderBuyTotal() {
-        const quantity = pricing.parseTokenQuantity(buyAmount.value, { multipleOf: pricing.TOKEN_LIMITS.step });
+        const quantity = pricing.parseTokenQuantity(buyAmount.value);
         const price = buyData && buyData.price;
         buyPayBtn.innerHTML = 'Pay with Card';
         if (Number.isNaN(quantity)) {
-            buyTotal.textContent = 'Tokens are bought 10 at a time: enter 10, 20, 30 and so on.';
+            buyTotal.textContent = `Enter at least ${pricing.TOKEN_LIMITS.min} tokens.`;
             buyPayBtn.disabled = true;
             return;
         }
@@ -161,9 +159,9 @@
     }
 
     if (buyAmount) {
-        buyStepper = setupTokenStepper({ input: buyAmount, less: $('buyTokensLess'), more: $('buyTokensMore'), onChange: renderBuyTotal, wholeSteps: true });
+        buyStepper = setupTokenStepper({ input: buyAmount, less: $('buyTokensLess'), more: $('buyTokensMore'), onChange: renderBuyTotal });
         buyPayBtn.addEventListener('click', async () => {
-            const quantity = pricing.parseTokenQuantity(buyAmount.value, { multipleOf: pricing.TOKEN_LIMITS.step });
+            const quantity = pricing.parseTokenQuantity(buyAmount.value);
             if (Number.isNaN(quantity) || buyBusy) return;
             buyBusy = true;
             buyPayBtn.disabled = true;

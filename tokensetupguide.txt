@@ -13,6 +13,7 @@ THIS APP'S SETTINGS
                        setting for them; APP_TAG / APP_NAME override them)
   Firebase project ... ai-foundation-firebase (shared by every app)
   Live site .......... https://g-class-builder.vercel.app
+  Custom domain ...... https://gclassbuilder.aifoundation.net.au
   GitHub ............. https://github.com/aifoundationau/GClass-Builder
   Where people buy ... the Tokens tab, the last item in the sidebar
 
@@ -79,8 +80,9 @@ THE SHARED SYSTEM (unchanged; the main guide's PART 2 has the full detail)
     balance, with a key that stops it happening twice.
   - The price per token is set once, in the AI Foundation admin panel (Services &
     Pricing -> Tokens). USD $1 when blank. Australians pay the AUD price if set.
-  - Tokens are bought 10 at a time with Stripe Checkout. The server works out the
-    price; the browser only says how many tokens.
+  - Buyers choose any whole number of tokens from 10 (+ and - move by 10) and pay
+    with Stripe Checkout. The server works out the price; the browser only says
+    how many tokens.
   - Only the two SuperAdmins can add tokens for free (Token Accounts).
 
 THIS APP'S SHAPE
@@ -237,8 +239,14 @@ STEP B  Vercel environment variables (main guide Step 5b)
 
 STEP C  Authorized sign-in domains (main guide Step 6)
   https://console.firebase.google.com/project/ai-foundation-firebase/authentication/settings
-  Check that g-class-builder.vercel.app is listed (the app's own Google sign-in
-  needs it too), and add any custom domain. Never add plain vercel.app.
+  Check that g-class-builder.vercel.app and gclassbuilder.aifoundation.net.au
+  are listed (the app's own Google sign-in needs them too). Never add plain
+  vercel.app.
+  The Classroom sign-in has its own Google OAuth client, in the same Google
+  Cloud project: each domain's https://<domain>/api/auth/oauth2callback must
+  be in its Authorized redirect URIs, or Google answers
+  "Error 400: redirect_uri_mismatch":
+  https://console.cloud.google.com/apis/credentials?project=ai-foundation-firebase
   Locally, open http://localhost:5173 (localhost is already listed).
 
 STEP D  Firestore rules (main guide Step 7): from the AI Foundation folder only

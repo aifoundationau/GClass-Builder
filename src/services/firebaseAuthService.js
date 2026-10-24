@@ -1,12 +1,14 @@
 // Universal Firebase Authentication & Firestore Role Management Service
 // Unbreakable authentication compatible with Namecheap, Hostinger, Vercel, GoDaddy & Localhost
 
-import { 
-  signInWithPopup, 
-  signInWithRedirect, 
-  getRedirectResult, 
-  signOut, 
-  onAuthStateChanged 
+import {
+  signInWithPopup,
+  signInWithRedirect,
+  signInWithCredential,
+  GoogleAuthProvider,
+  getRedirectResult,
+  signOut,
+  onAuthStateChanged
 } from "firebase/auth";
 import {
   doc,
@@ -141,6 +143,15 @@ export async function signInWithGoogle() {
   }
 }
 
+// One sign-in for both: the Google ID token from the app's Google (Classroom) sign-in signs the same
+// account in to Firebase, so roles and tokens apply without a second Google window. subscribeToAuth
+// then syncs the profile.
+export async function signInWithGoogleIdToken(idToken) {
+  if (!isFirebaseConfigured || !idToken) return null;
+  const result = await signInWithCredential(auth, GoogleAuthProvider.credential(idToken));
+  return result.user;
+}
+
 // Check redirect login result (for mobile or redirected flows)
 export async function checkRedirectAuthResult() {
   if (!isFirebaseConfigured) return null;
@@ -198,7 +209,8 @@ export function subscribeToUserProfile(uid, callback) {
     return onSnapshot(userRef, async (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        data.isSuperAdmin = await verifySuperadminStatus(data);
+        // The owner check uses the signed-in account: profiles written by other apps may not store the uid
+        data.isSuperAdmin = await verifySuperadminStatus({ ...data, uid });
         callback(data);
       }
     }, (err) => {

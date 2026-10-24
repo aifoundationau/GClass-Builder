@@ -112,6 +112,8 @@ export default async function handler(req, res) {
       avatar: avatar,
       domain: email.includes('@') ? email.split('@')[1] : '',
       access_token: tokenData.access_token,
+      // The sign-in's Google ID token (valid an hour), so the browser can sign the same account in to Firebase
+      id_token: tokenData.id_token || '',
       login_time: new Date().toISOString()
     };
 
