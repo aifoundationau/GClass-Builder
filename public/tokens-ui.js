@@ -76,6 +76,10 @@
     function renderBuyTotal() {
         const quantity = pricing.parseTokenQuantity(buyAmount.value);
         const price = buyData && buyData.price;
+        const priceUsd = buyData && buyData.priceUsd;
+        const priceAud = buyData && buyData.priceAud;
+        const rateInfo = buyData && buyData.exchangeRate;
+
         buyPayBtn.innerHTML = 'Pay with Card';
         if (Number.isNaN(quantity)) {
             buyTotal.textContent = `Enter at least ${pricing.TOKEN_LIMITS.min} tokens.`;
@@ -91,10 +95,34 @@
         let problem = '';
         if (total.amount < buyData.minPayment) problem = `The smallest card payment is ${total.currency} $0.50, so please choose more tokens.`;
         else if (total.amount > buyData.maxPayment) problem = `One card payment can be at most ${total.currency} $999,999.99, so please choose fewer tokens.`;
+
+        // Base USD price
+        const baseUsdPrice = priceUsd ? priceUsd : (price.currency === 'USD' ? price : { currency: 'USD', amount: 1 });
+        const usdTotal = pricing.tokenTotal(baseUsdPrice, quantity);
+
+        // Converted or explicit AUD price
+        let baseAudPrice = priceAud;
+        if (!baseAudPrice && rateInfo && rateInfo.rate) {
+            const converted = pricing.convertUsdToAud(baseUsdPrice.amount, rateInfo.rate, { decimals: 2 });
+            if (converted) baseAudPrice = { currency: 'AUD', amount: converted };
+        }
+        const audTotal = baseAudPrice ? pricing.tokenTotal(baseAudPrice, quantity) : null;
+
+        const usdTotalFormatted = usdTotal ? pricing.formatPrice(usdTotal) : '';
+        const audTotalFormatted = audTotal ? pricing.formatPrice(audTotal) : '';
+        const usdRateFormatted = pricing.formatPrice(baseUsdPrice);
+        const audRateFormatted = baseAudPrice ? pricing.formatPrice(baseAudPrice) : '';
+
         buyTotal.innerHTML = `
-            <strong>${escapeHtml(pricing.formatPrice(total))}</strong> for ${quantity.toLocaleString('en-AU')} tokens
-            <span class="tokens-rate">${escapeHtml(pricing.formatPrice(price))} per token</span>
-            ${problem ? `<span class="tokens-rate">${escapeHtml(problem)}</span>` : ''}`;
+            <div class="tokens-total-line" data-agent-id="tokens-total-line" data-testid="tokens-total-line">
+                <strong class="tokens-total-amount">${escapeHtml(usdTotalFormatted)}</strong>
+                ${audTotalFormatted ? `<span class="tokens-aud-converted" title="Approximate AUD equivalent based on live exchange rate">(≈ ${escapeHtml(audTotalFormatted)})</span>` : ''}
+                <span class="tokens-qty-label">for ${quantity.toLocaleString('en-AU')} tokens</span>
+                <span class="tokens-sep-dot" aria-hidden="true">•</span>
+                <span class="tokens-unit-rate" title="${audRateFormatted ? `1 token = ${escapeHtml(usdRateFormatted)} (≈ ${escapeHtml(audRateFormatted)})` : `1 token = ${escapeHtml(usdRateFormatted)}`}">1 token = ${escapeHtml(usdRateFormatted)}</span>
+            </div>
+            ${problem ? `<div class="tokens-problem-text">${escapeHtml(problem)}</div>` : ''}`;
+
         buyPayBtn.innerHTML = `Pay ${escapeHtml(pricing.formatPrice(total))}`;
         buyPayBtn.disabled = buyBusy || Boolean(problem) || !buyData.canPay || buyData.balance === null || buyData.hasProfile === false;
     }
@@ -150,11 +178,118 @@
         setStatus(buyStatus, notice ? notice.text : '', notice ? notice.type : 'info');
         buyStepper.refresh();
 
-        // Token Accounts is for SuperAdmins only (the server checks this too)
+        // Token Pricing Settings: SuperAdmins only
+        const pricingSection = $('tokenPricingSection');
+        if (pricingSection) {
+            pricingSection.hidden = !buyData.isSuperAdmin;
+            if (buyData.isSuperAdmin) loadTokenPricingSettings();
+        }
+
+        // Token Accounts: SuperAdmins only
         const accountsSection = $('tokenAccountsSection');
         if (accountsSection) {
             accountsSection.hidden = !buyData.isSuperAdmin;
             if (buyData.isSuperAdmin) loadTokenAccounts();
+        }
+    }
+
+    // ---------- Token Price Settings (SuperAdmin) ----------
+    const priceUsdInput = $('adminTokenPriceUsd');
+    const priceAudInput = $('adminTokenPriceAud');
+    const priceMetaInfo = $('adminExchangeRateInfo');
+    const priceMetaUpdated = $('adminPriceLastUpdated');
+    const priceSaveBtn = $('adminSaveTokenPriceBtn');
+    const priceResetBtn = $('adminResetTokenPriceBtn');
+    const priceStatus = $('tokenPricingStatus');
+    let currentExchangeRate = null;
+    let pricingBusy = false;
+
+    function updateAudPreviewFromUsd() {
+        if (!currentExchangeRate) return;
+        const usdVal = parseFloat(priceUsdInput.value);
+        if (Number.isFinite(usdVal) && usdVal > 0) {
+            const converted = pricing.convertUsdToAud(usdVal, currentExchangeRate, { decimals: 2 });
+            if (converted) {
+                priceAudInput.value = converted.toFixed(2);
+            }
+        }
+    }
+
+    async function loadTokenPricingSettings() {
+        if (!priceUsdInput) return;
+        setStatus(priceStatus, '');
+        try {
+            const res = await fetch('/api/tokens/pricing-settings');
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+            priceUsdInput.value = data.usd ? data.usd.toFixed(2) : '1.00';
+            if (data.aud) {
+                priceAudInput.value = data.aud.toFixed(2);
+            } else if (data.convertedAud) {
+                priceAudInput.value = data.convertedAud.toFixed(2);
+            }
+            if (data.exchangeRate && data.exchangeRate.rate) {
+                currentExchangeRate = data.exchangeRate.rate;
+                priceMetaInfo.textContent = `Exchange rate: 1 USD = ${data.exchangeRate.rate.toFixed(4)} AUD (via ${data.exchangeRate.source || 'Frankfurter'}, ${data.exchangeRate.date || 'today'})`;
+            } else {
+                priceMetaInfo.textContent = 'Exchange rate: Default conversion active';
+            }
+            if (data.updatedAt) {
+                const dateStr = new Date(data.updatedAt).toLocaleString();
+                priceMetaUpdated.textContent = `Last saved: ${dateStr}${data.updatedBy ? ` by ${data.updatedBy}` : ''}`;
+            } else {
+                priceMetaUpdated.textContent = 'Using default baseline pricing ($1.00 USD)';
+            }
+        } catch (e) {
+            setStatus(priceStatus, `Could not load pricing settings: ${e.message}`, 'error');
+        }
+    }
+
+    if (priceUsdInput) {
+        priceUsdInput.addEventListener('input', updateAudPreviewFromUsd);
+        if (priceResetBtn) {
+            priceResetBtn.addEventListener('click', () => {
+                priceUsdInput.value = '1.00';
+                updateAudPreviewFromUsd();
+            });
+        }
+        if (priceSaveBtn) {
+            priceSaveBtn.addEventListener('click', async () => {
+                const usd = pricing.parseAmount(priceUsdInput.value, { decimals: 2 });
+                if (Number.isNaN(usd) || usd === null || usd <= 0) {
+                    setStatus(priceStatus, 'Please enter a valid USD price (e.g. 1.00 or 1.25).', 'error');
+                    return;
+                }
+                const aud = priceAudInput.value.trim() ? pricing.parseAmount(priceAudInput.value, { decimals: 2 }) : null;
+
+                pricingBusy = true;
+                priceSaveBtn.disabled = true;
+                priceSaveBtn.textContent = 'Saving...';
+                setStatus(priceStatus, '');
+                try {
+                    const res = await fetch('/api/tokens/pricing-settings', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ usd, aud })
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+                    setStatus(priceStatus, `Token price updated successfully to USD $${data.prices.usd.toFixed(2)} (AUD $${data.prices.aud ? data.prices.aud.toFixed(2) : (data.convertedAud || 0).toFixed(2)}).`, 'ok');
+                    if (data.updatedAt) {
+                        priceMetaUpdated.textContent = `Last saved: ${new Date(data.updatedAt).toLocaleString()}`;
+                    }
+                    // Refresh Buy Tokens card to reflect new token price immediately
+                    loadBuyTokens();
+                } catch (e) {
+                    setStatus(priceStatus, `Could not save token price: ${e.message}`, 'error');
+                } finally {
+                    pricingBusy = false;
+                    priceSaveBtn.disabled = false;
+                    priceSaveBtn.textContent = 'Save Token Price';
+                }
+            });
         }
     }
 

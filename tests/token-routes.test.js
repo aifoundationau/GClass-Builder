@@ -67,6 +67,8 @@ test('every token route refuses callers without a valid sign-in', async () => {
         ['POST', '/api/tokens/spend', { tokens: 10, app: 'testapp', reference: 'order-1' }],
         ['GET', '/api/tokens/accounts'],
         ['POST', '/api/tokens/grant', { uid: 'user123', tokens: 10, requestId: 'req-0001-abcd' }],
+        ['GET', '/api/tokens/pricing-settings'],
+        ['PUT', '/api/tokens/pricing-settings', { usd: 1.25 }],
         ['POST', '/api/profile/sync', {}],
         ['GET', '/api/exchange-rates/usd-aud']
     ];
